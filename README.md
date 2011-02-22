@@ -2,11 +2,13 @@ filmdata
 ========
 
 This library will fetch raw data from the following sources:
-*  [imdb](http://www.imdb.com/interfaces)
-*  [netflix](http://developer.netflix.com/)
+
+* [imdb](http://www.imdb.com/interfaces)
+* [netflix](http://developer.netflix.com/)
 
 That data is then imported into the following sinks:
-*  [SQLAlchemy](http://www.sqlalchemy.org) (use your preferred relational db behind it)
+
+* [SQLAlchemy](http://www.sqlalchemy.org) (use your preferred relational db behind it)
 
 Coming soon: freebase source and mongodb sink
 
