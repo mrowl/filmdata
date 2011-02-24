@@ -1,6 +1,6 @@
 import logging
 
-from sqlalchemy import or_, create_engine
+from sqlalchemy import or_, create_engine, orm, func
 
 from filmdata.sinks.sa import model
 from filmdata.sinks.sa import meta
@@ -21,6 +21,10 @@ class SaSink:
     def setup(self):
         log.info("Dropping all tables in the DB")
         meta.metadata.drop_all(bind=meta.engine)
+        log.info("Creating all tables in the DB")
+        meta.metadata.create_all(bind=meta.engine)
+
+    def install(self):
         log.info("Creating all tables in the DB")
         meta.metadata.create_all(bind=meta.engine)
 
@@ -108,14 +112,21 @@ class SaSink:
                 self.__s.add(aka_model)
         self.__db_close()
 
-    def consume_ranks(self, producer, tbl_model, tbl_name, type=None):
+    def consume_metrics(self, producer, tbl_name, type=None):
+
+        classes = {
+            'metric_title' : model.MetricTitle,
+            'metric_person_role' : model.MetricPersonRole,
+        }
+
+        tbl_model = classes[tbl_name]
 
         self.__db_open()
 
         if type:
             self.__s.query(tbl_model).filter(tbl_model.type == type).delete()
         else:
-            self.__s.execute("truncate %s" % (tbl_name))
+            self.__s.execute("truncate %s restart identity" % (tbl_name))
         
         self.__db_close()
 
@@ -127,6 +138,77 @@ class SaSink:
             self.__s.add(tbl_model(**row))
 
         self.__db_close()
+
+    def get_titles_rating(self):
+        self.__db_open()
+
+        dict_maker = lambda t: {
+            'title_id' : t.title_id,
+            'imdb_rating' : t.data_imdb.rating,
+            'imdb_votes' : t.data_imdb.votes,
+            'netflix_rating' : t.data_netflix.rating,
+        }
+
+        #.filter(model.Title.type.in_(('film',)))\
+        titles = self.__s.query(model.Title)\
+                         .options(orm.contains_eager(model.Title.data_imdb))\
+                         .options(orm.contains_eager(model.Title.data_netflix))\
+                         .join(model.Title.data_imdb)\
+                         .join(model.Title.data_netflix)\
+                         .filter(model.DataImdb.votes > 4000)\
+                         .all()
+
+        titles_rating =  [ dict_maker(t) for t in titles ]
+        self.__db_close()
+        return titles_rating
+
+    def get_persons_role_titles_agg(self):
+        self.__db_open()
+
+        orm.util.class_mapper(model.Person).add_properties({
+            "titles_count" : orm.column_property(
+                func.count(model.Title.title_id).label("titles_count")
+            ),
+            "imdb_rating_sum" : orm.column_property(
+                func.sum(model.DataImdb.rating).label("imdb_rating_sum")
+            ),
+            "imdb_votes_sum" : orm.column_property(
+                func.sum(model.DataImdb.votes).label("imdb_votes_sum")
+            ),
+            "netflix_rating_sum" : orm.column_property(
+                func.sum(model.DataNetflix.rating).label("netflix_rating_sum")
+            ),
+        })
+
+        dict_maker = lambda p: {
+            'person_id' : p.person_id,
+            'role_type' : p.type,
+            'imdb_rating_sum' : p.imdb_rating_sum,
+            'imdb_votes_sum' : p.imdb_votes_sum,
+            'netflix_rating_sum' : p.netflix_rating_sum,
+            'titles_count' : p.titles_count,
+        }
+
+        persons = self.__s.query(model.Person.person_id,
+                                 model.Person.titles_count,
+                                 model.Person.imdb_rating_sum,
+                                 model.Person.imdb_votes_sum,
+                                 model.Person.netflix_rating_sum,
+                                 model.Role.type)\
+                          .join(model.Role)\
+                          .join(model.Title)\
+                          .join(model.DataImdb)\
+                          .join(model.DataNetflix)\
+                          .filter(model.DataImdb.votes >= 4000)\
+                          .filter(model.Title.type == 'film')\
+                          .group_by(model.Person.person_id)\
+                          .group_by(model.Role.type)\
+                          .having(model.Person.titles_count >= 4)\
+                          .all()
+
+        self.__db_close()
+
+        return [ dict_maker(p) for p in persons ]
 
     def __get_model(self, model_class, row, search=None):
         if not search:

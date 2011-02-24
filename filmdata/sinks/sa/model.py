@@ -115,27 +115,32 @@ data_netflix_table = sa.Table("data_netflix", meta.metadata,
     #sa.UniqueConstraint("title_id", name="freebase_title_link"),
     #)
 
-rank_title_rating_table = sa.Table("rank_title_rating", meta.metadata,
-    sa.Column("rank_title_rating_id", sa.types.Integer, primary_key=True),
+metric_title_table = sa.Table("metric_title", meta.metadata,
+    sa.Column("metric_title_id", sa.types.Integer, primary_key=True),
     sa.Column("title_id", sa.types.Integer, sa.ForeignKey("title.title_id")),
-    sa.Column("rank", sa.types.Integer),
-    sa.Column("imdb", sa.types.Numeric(asdecimal=True)),
-    sa.Column("netflix", sa.types.Numeric(asdecimal=True)),
-    sa.Column("average", sa.types.Numeric(asdecimal=True)),
+    sa.Column("imdb_rating", sa.types.Numeric(asdecimal=True)),
+    sa.Column("imdb_votes", sa.types.Integer),
+    sa.Column("imdb_bayes", sa.types.Numeric(asdecimal=True)),
+    sa.Column("netflix_rating", sa.types.Numeric(asdecimal=True)),
+    sa.Column("average_rating", sa.types.Numeric(asdecimal=True)),
     sa.Column("created", sa.types.DateTime(), nullable=False,
               default=datetime.datetime.now),
     sa.Column("modified", sa.types.DateTime(), nullable=False,
               default=datetime.datetime.now, onupdate=datetime.datetime.now),
     )
 
-rank_person_role_rating_table = sa.Table("rank_person_role_rating", meta.metadata,
-    sa.Column("rank_person_role_rating_id", sa.types.Integer, primary_key=True),
+metric_person_role_table = sa.Table("metric_person_role", meta.metadata,
+    sa.Column("metric_person_role_id", sa.types.Integer, primary_key=True),
     sa.Column("person_id", sa.types.Integer, sa.ForeignKey("person.person_id")),
-    sa.Column("type", EnumIntType(ROLE_TYPES), nullable=False),
-    sa.Column("rank", sa.types.Integer),
-    sa.Column("imdb", sa.types.Numeric(asdecimal=True)),
-    sa.Column("netflix", sa.types.Numeric(asdecimal=True)),
-    sa.Column("average", sa.types.Numeric(asdecimal=True)),
+    sa.Column("role_type", EnumIntType(ROLE_TYPES), nullable=False),
+    sa.Column("titles_count", sa.types.Numeric(asdecimal=True)),
+    sa.Column("imdb_votes_sum", sa.types.Numeric(asdecimal=True)),
+    sa.Column("imdb_rating_avg", sa.types.Numeric(asdecimal=True)),
+    sa.Column("netflix_rating_avg", sa.types.Numeric(asdecimal=True)),
+    sa.Column("average_rating_avg", sa.types.Numeric(asdecimal=True)),
+    sa.Column("imdb_rating_bayes", sa.types.Numeric(asdecimal=True)),
+    sa.Column("netflix_rating_bayes", sa.types.Numeric(asdecimal=True)),
+    sa.Column("average_rating_bayes", sa.types.Numeric(asdecimal=True)),
     sa.Column("created", sa.types.DateTime(), nullable=False,
               default=datetime.datetime.now),
     sa.Column("modified", sa.types.DateTime(), nullable=False,
@@ -245,40 +250,27 @@ class DataNetflix(object):
         return "<DataNetflix('%s','%s','%s')>" % (self.rating, self.title_id,
                                                   self.key)
 
-class RankTitleRating(object):
+class MetricTitle(object):
 
-    def __init__(self, title_id=None, rank=None, imdb=None,
-                 netflix=None, average=None):
-        self.title_id = title_id
-        self.rank = rank
-        self.imdb = imdb
-        self.netflix = netflix
-        self.average = average
+    def __init__(self, **kwargs):
+        for k,v in kwargs.iteritems():
+            setattr(self, k, v)
 
     def __repr__(self):
-        return "<RankTitleRating('%s','%s','%s')>" % (self.title_id, self.rank,
-                                                      self.imdb, self.netflix,
-                                                      self.average)
+        return "<MetricTitle('%s','%s','%s')>" % (self.title_id)
 
-class RankPersonRoleRating(object):
+class MetricPersonRole(object):
 
-    def __init__(self, person_id=None, type=None, rank=None, imdb=None,
-                 netflix=None, average=None):
-        self.person_id = person_id
-        self.type = type
-        self.rank = rank
-        self.imdb = imdb
-        self.netflix = netflix
-        self.average = average
+    def __init__(self, **kwargs):
+        for k,v in kwargs.iteritems():
+            setattr(self, k, v)
 
     def __repr__(self):
-        return "<RankPersonRoleRating('%s','%s','%s')>" % (self.person_id, self.type,
-                                                           self.rank, self.imdb,
-                                                           self.netflix, self.average)
+        return "<MetricPersonRole('%s','%s','%s')>" % (self.person_id, self.type)
 
 orm.mapper(Person, person_table, properties={
     'roles' : orm.relation(Role, backref='person'),
-    'rank_role_rating' : orm.relation(RankPersonRoleRating, backref='person'),
+    'metric_role' : orm.relation(MetricPersonRole, backref='person'),
 })
 orm.mapper(Title, title_table, properties={
     'roles' : orm.relation(Role, backref='title'),
@@ -290,5 +282,5 @@ orm.mapper(Role, role_table)
 orm.mapper(DataImdb, data_imdb_table)
 orm.mapper(DataNetflix, data_netflix_table)
 orm.mapper(AkaTitle, aka_title_table)
-orm.mapper(RankTitleRating, rank_title_rating_table)
-orm.mapper(RankPersonRoleRating, rank_person_role_rating_table)
+orm.mapper(MetricTitle, metric_title_table)
+orm.mapper(MetricPersonRole, metric_person_role_table)

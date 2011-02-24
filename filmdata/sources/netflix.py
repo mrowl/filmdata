@@ -27,8 +27,8 @@ class NetflixSource:
     def __init__(self):
         pass
 
-    def produce_numbers(self):
-        for title in self.__get_titles():
+    def produce_numbers(self, types):
+        for title in self.__get_titles(types):
             yield title
 
     def fetch_data(self):
@@ -63,7 +63,7 @@ class NetflixSource:
                 if i > self.__call_limit:
                     break
 
-    def __get_titles(self):
+    def __get_titles(self, types=None):
         in_item = False
         skip_title = False
         h = HTMLParser.HTMLParser()
@@ -94,7 +94,7 @@ class NetflixSource:
 
                 title_info = self.__get_title_info(title_key)
                 if title_info:
-                    title_rating = decimal.Decimal(title_info['rating'])
+                    title_rating = decimal.Decimal(title_info['rating']) * 2
                 else:
                     title_rating = 0
                 numbers = { 'rating' : title_rating, 'key' : int(title_key) }

@@ -29,9 +29,9 @@ def run_data_fetch(source):
     log.info('Fetching data from source: %s' % source.name)
     source.fetch_data()
 
-def run_data_import(source, sink):
+def run_data_import(source, sink, types):
     log.info('Importing data from source: %s' % source.name)
-    sink.consume_numbers(source.produce_numbers())
+    sink.consume_numbers(source.produce_numbers(types))
 
 def main():
     parser = OptionParser()
@@ -44,6 +44,9 @@ def main():
     parser.add_option("--sink-init", action="store_true",
                       dest="sink_init",
                       help="Initialize your chosen sink (i.e. destroy data and build data(base|store) schema)")
+    parser.add_option("--sink-install", action="store_true",
+                      dest="sink_install",
+                      help="Install your chosen sink (i.e. build data(base|store) schema)")
     #parser.add_option("--titles", action="append_const",
                       #dest="titles_update",
                       #help="Update the titles table (from IMDB)")
@@ -92,6 +95,9 @@ def main():
     parser.add_option("--imdb-import", action="store_true",
                       dest="imdb_import",
                       help="Run the imdb import")
+    parser.add_option("--crunch", action="store_true",
+                      dest="crunch",
+                      help="Run the numbers")
 
     (options, args) = parser.parse_args()
     
@@ -108,6 +114,8 @@ def main():
     sink = Sink()
     if options.sink_init:
         sink.setup()
+    elif options.sink_install:
+        sink.install()
 
     active_role_types = config.get('core', 'active_role_types').split()
     active_title_types = config.get('core', 'active_title_types').split()
@@ -115,20 +123,20 @@ def main():
     if options.netflix_both:
         log.info('Running both the fetch and import for netflix...')
         run_data_fetch(NetflixSource())
-        run_data_import(sink, NetflixSource())
+        run_data_import(sink, NetflixSource(), active_title_types)
     elif options.netflix_fetch:
         run_data_fetch(NetflixSource())
     elif options.netflix_import:
-        run_data_import(NetflixSource(), sink)
+        run_data_import(NetflixSource(), sink, active_title_types)
 
     if options.imdb_both:
         log.info('Running both the fetch and import for imdb...')
         run_data_fetch(ImdbSource())
-        run_data_import(ImdbSource(), sink)
+        run_data_import(ImdbSource(), sink, active_title_types)
     elif options.imdb_fetch:
         run_data_fetch(ImdbSource())
     elif options.imdb_import:
-        run_data_import(ImdbSource(), sink)
+        run_data_import(ImdbSource(), sink, active_title_types)
 
     if options.aka_both:
         log.info('Running both the fetch and import for aka titles...')
@@ -149,6 +157,13 @@ def main():
     elif options.roles_import:
         run_roles_import(ImdbSource(), sink, active_title_types,
                          active_role_types)
+
+    if options.crunch:
+        from filmdata.metric.title import Metric
+        sink.consume_metrics(Metric().build(sink), 'metric_title')
+        return 0
+        for t in sink.get_persons_title_agg('director'):
+            log.debug(str(t))
 
 if __name__ == '__main__':
     main()
