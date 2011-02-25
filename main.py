@@ -1,10 +1,13 @@
 import logging
 from optparse import OptionParser
 
+from yapsy.PluginManager import PluginManager
+
 from filmdata.sources.netflix import NetflixSource
 from filmdata.sources.imdb import ImdbSource
 #from filmdata.sinks.mongo import MongoSink
 
+import filmdata
 from filmdata import config
 
 log = logging.getLogger('filmdata.main')
@@ -13,34 +16,45 @@ def run_roles_fetch(source, types):
     log.info('Fetching all active roles: %s' % str(types))
     source.fetch_roles(types)
 
-def run_roles_import(source, sink, title_types, role_types):
+def run_roles_import(source, title_types, role_types):
     log.info('Importing all active roles: %s' % str(role_types))
-    sink.consume_roles(source.produce_roles(title_types, role_types))
+    filmdata.sink.consume_roles(source.produce_roles(title_types, role_types))
 
 def run_aka_fetch(source):
     log.info('Fetching aka titles from source: %s' % source.name)
     source.fetch_aka_titles()
 
-def run_aka_import(source, sink, types):
+def run_aka_import(source, types):
     log.info('Importing aka titles from source: %s' % source.name)
-    sink.consume_aka_titles(source.produce_aka_titles(types))
+    filmdata.sink.consume_aka_titles(source.produce_aka_titles(types))
 
 def run_data_fetch(source):
     log.info('Fetching data from source: %s' % source.name)
     source.fetch_data()
 
-def run_data_import(source, sink, types):
+def run_data_import(source, types):
     log.info('Importing data from source: %s' % source.name)
-    sink.consume_numbers(source.produce_numbers(types))
+    filmdata.sink.consume_numbers(source.produce_numbers(types))
+
+def crunch(option, opt_str, value, parser):
+    simplePluginManager = PluginManager()
+    simplePluginManager.setPluginPlaces(["filmdata/metric"])
+    simplePluginManager.collectPlugins()
+    if value and value != 'all':
+        names = value.split(',')
+        for name in names:
+            simplePluginManager.activatePluginByName(name)
+    else:
+        for plugin in simplePluginManager.getAllPlugins():
+            simplePluginManager.activatePluginByName(plugin.name)
 
 def main():
+    if config.get('core', 'active_sink') == 'sqlalchemy':
+        from filmdata.sinks.sa.base import SaSink as Sink
+        log.info('Sink set to SQLAlchemy, all data will be directed there!')
+        filmdata.sink = Sink()
+
     parser = OptionParser()
-    parser.add_option("-s", "--sqlalchemy", action="store_true",
-                      dest="sa",
-                      help="Use SQLAlchemy as the data sink (default)")
-    #parser.add_option("-m", "--mongo", action="store_true",
-                      #dest="mongo",
-                      #help="Use MongoDB as the data sink [NOT FUNCTIONAL RIGHT NOW]")
     parser.add_option("--sink-init", action="store_true",
                       dest="sink_init",
                       help="Initialize your chosen sink (i.e. destroy data and build data(base|store) schema)")
@@ -95,27 +109,16 @@ def main():
     parser.add_option("--imdb-import", action="store_true",
                       dest="imdb_import",
                       help="Run the imdb import")
-    parser.add_option("--crunch", action="store_true",
-                      dest="crunch",
+    parser.add_option("-c", "--crunch", action="callback",
+                      callback=crunch, type="string",
                       help="Run the numbers")
 
     (options, args) = parser.parse_args()
     
-    #if options.sa and options.mongo:
-        #parser.error("options -s and -m are mutually exclusive.  only one sink allowed!")
-    #elif options.mongo:
-        #from filmdata.sinks.mongo.base import MongoSink as Sink
-    #else:
-        #log.info('Sink set to SQLAlchemy, all data will be directed there!')
-        #from filmdata.sinks.sa.base import SaSink as Sink
-
-    from filmdata.sinks.sa.base import SaSink as Sink
-    log.info('Sink set to SQLAlchemy, all data will be directed there!')
-    sink = Sink()
     if options.sink_init:
-        sink.setup()
+        filmdata.sink.setup()
     elif options.sink_install:
-        sink.install()
+        filmdata.sink.install()
 
     active_role_types = config.get('core', 'active_role_types').split()
     active_title_types = config.get('core', 'active_title_types').split()
@@ -123,47 +126,40 @@ def main():
     if options.netflix_both:
         log.info('Running both the fetch and import for netflix...')
         run_data_fetch(NetflixSource())
-        run_data_import(sink, NetflixSource(), active_title_types)
+        run_data_import(NetflixSource(), active_title_types)
     elif options.netflix_fetch:
         run_data_fetch(NetflixSource())
     elif options.netflix_import:
-        run_data_import(NetflixSource(), sink, active_title_types)
+        run_data_import(NetflixSource(), active_title_types)
 
     if options.imdb_both:
         log.info('Running both the fetch and import for imdb...')
         run_data_fetch(ImdbSource())
-        run_data_import(ImdbSource(), sink, active_title_types)
+        run_data_import(ImdbSource(), active_title_types)
     elif options.imdb_fetch:
         run_data_fetch(ImdbSource())
     elif options.imdb_import:
-        run_data_import(ImdbSource(), sink, active_title_types)
+        run_data_import(ImdbSource(), active_title_types)
 
     if options.aka_both:
         log.info('Running both the fetch and import for aka titles...')
         run_aka_fetch(ImdbSource())
-        run_aka_import(ImdbSource(), sink, active_title_types)
+        run_aka_import(ImdbSource(), active_title_types)
     elif options.aka_fetch:
         run_aka_fetch(ImdbSource())
     elif options.aka_import:
-        run_aka_import(ImdbSource(), sink, active_title_types)
+        run_aka_import(ImdbSource(), active_title_types)
 
     if options.roles_both:
         log.info('Running both the fetch and import for roles...')
         run_roles_fetch(ImdbSource(), active_role_types)
-        run_roles_import(ImdbSource(), sink, active_title_types,
+        run_roles_import(ImdbSource(), active_title_types,
                          active_role_types)
     elif options.roles_fetch:
         run_roles_fetch(ImdbSource(), active_role_types)
     elif options.roles_import:
-        run_roles_import(ImdbSource(), sink, active_title_types,
+        run_roles_import(ImdbSource(), active_title_types,
                          active_role_types)
-
-    if options.crunch:
-        from filmdata.metric.title import Metric
-        sink.consume_metrics(Metric().build(sink), 'metric_title')
-        return 0
-        for t in sink.get_persons_title_agg('director'):
-            log.debug(str(t))
 
 if __name__ == '__main__':
     main()

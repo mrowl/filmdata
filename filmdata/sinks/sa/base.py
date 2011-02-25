@@ -112,7 +112,7 @@ class SaSink:
                 self.__s.add(aka_model)
         self.__db_close()
 
-    def consume_metrics(self, producer, tbl_name, type=None):
+    def consume_metric(self, producer, tbl_name, type=None):
 
         classes = {
             'metric_title' : model.MetricTitle,
@@ -201,6 +201,8 @@ class SaSink:
                           .join(model.DataNetflix)\
                           .filter(model.DataImdb.votes >= 4000)\
                           .filter(model.Title.type == 'film')\
+                          .filter(or_(model.Role.type == 'director', 
+                                      model.Role.billing <= 8))\
                           .group_by(model.Person.person_id)\
                           .group_by(model.Role.type)\
                           .having(model.Person.titles_count >= 4)\

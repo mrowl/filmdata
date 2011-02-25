@@ -1,0 +1,8 @@
+[Core]
+Name = person_role
+Module = person_role
+
+[Documentation]
+Description = Aggregates metrics across person+role combos
+Author = scott
+Version = 0.1

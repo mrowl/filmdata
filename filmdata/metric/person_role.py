@@ -1,6 +1,9 @@
-from filmdata.metric import Data, avg, div, mult
+from yapsy.IPlugin import IPlugin
 
-class Metric:
+from filmdata.metric import Data, avg, div, mult
+from filmdata import sink
+
+class MetricPersonRole(IPlugin):
     type = 'title'
     subtype = 'by ratings'
     title = 'top titles by vote ratings'
@@ -21,7 +24,7 @@ class Metric:
     def __init__(self):
         pass
 
-    def build(self, sink):
+    def activate(self):
         data = Data(sink.get_persons_role_titles_agg())
         data.add_field('imdb_rating_avg',
                        (div, 'imdb_rating_sum', 'titles_count'))
@@ -40,4 +43,4 @@ class Metric:
         report_mean = data.get_mean('average_rating_sum', 'titles_count')
         data.add_bayes('average_rating_avg', 'titles_count', 4,
                        report_mean, 'average_rating_bayes')
-        return data.get_rows(include=self.keys)
+        sink.consume_metric(data.get_rows(include=self.keys), 'metric_person_role')
