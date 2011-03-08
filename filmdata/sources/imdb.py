@@ -1,4 +1,4 @@
-import re, urllib, os, logging
+import re, urllib, os, logging, decimal
 import warnings
 
 from filmdata import config
@@ -50,7 +50,7 @@ class ImdbSource:
                     if title_key and title_key['type'] in types:
                         yield [ title_key,
                                 [ 'imdb',
-                                  { 'rating' : float(match.group(2)),
+                                  { 'rating' : decimal.Decimal(match.group(2)),
                                     'votes' : int(match.group(1)) } ] ]
 
     def produce_aka_titles(self, types):

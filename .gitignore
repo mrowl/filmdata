@@ -6,3 +6,4 @@ var/
 *.gz
 *.ini
 !config_sample.ini
+*.egg-info
