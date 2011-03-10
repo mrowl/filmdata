@@ -43,9 +43,20 @@ class MetricPersonRole(IPlugin):
         for k, titles_all in sink.get_persons_role_titles().iteritems():
             if len(titles_all) < 4:
                 continue
-            titles_filtered = [ t for t in titles_all if t['imdb_votes'] > 4000 ]
-            if len(titles_filtered) < 4:
-                continue
+            titles_filtered = [ t for t in titles_all
+                                if t['imdb_votes'] > 4000
+                                and (k[1] == 'director'
+                                     or (t['billing'] and t['billing'] <= 8)) ]
+            if k[1] != 'director':
+                if len(titles_filtered) < 6:
+                    continue
+                titles_top_bill = [ t for t in titles_filtered if t['billing'] == 1 ]
+                if len(titles_top_bill) < 2:
+                    continue
+            else:
+                if len(titles_filtered) < 4:
+                    continue
+
             titles_filtered.sort(key=operator.itemgetter('year'))
             title_arrays = {
                 'imdb_rating' : [ float(t['imdb_rating']) for t in titles_filtered ],

@@ -169,6 +169,7 @@ class SaSink:
                               model.Role.type,
                               model.Role.title_id,
                               model.Title.year,
+                              model.Role.billing,
                               model.DataImdb.rating,
                               model.DataImdb.votes,
                               model.DataNetflix.rating,
@@ -189,9 +190,10 @@ class SaSink:
             new_title = {
                 'id' : r[2],
                 'year' : r[3],
-                'imdb_rating' : r[4],
-                'imdb_votes' : r[5],
-                'netflix_rating' : r[6],
+                'billing' : r[4],
+                'imdb_rating' : r[5],
+                'imdb_votes' : r[6],
+                'netflix_rating' : r[7],
             }
             if person_key in person_roles:
                 person_roles[person_key].append(new_title)
