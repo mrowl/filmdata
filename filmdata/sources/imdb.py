@@ -17,7 +17,6 @@ class ImdbSource:
     __re_person_name = re.compile('^(.*?)\t+(.*)$')
     __re_title_info = re.compile('(.+?)\s+\(([0-9]{4}).*?\)\s?\(?(V|TV|VG)?.*$')
     __re_aka_title = re.compile('^\s+\(aka (.+?) \(([0-9]{4})\)\)\s+\((.+?)\)')
-    #Dirty Harry (1971)  [Norma]  <9>
 
     def __init__(self):
         pass

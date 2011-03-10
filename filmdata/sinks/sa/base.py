@@ -162,55 +162,43 @@ class SaSink:
         self.__db_close()
         return titles_rating
 
-    def get_persons_role_titles_agg(self):
+    def get_persons_role_titles(self):
         self.__db_open()
 
-        orm.util.class_mapper(model.Person).add_properties({
-            "titles_count" : orm.column_property(
-                func.count(model.Title.title_id).label("titles_count")
-            ),
-            "imdb_rating_sum" : orm.column_property(
-                func.sum(model.DataImdb.rating).label("imdb_rating_sum")
-            ),
-            "imdb_votes_sum" : orm.column_property(
-                func.sum(model.DataImdb.votes).label("imdb_votes_sum")
-            ),
-            "netflix_rating_sum" : orm.column_property(
-                func.sum(model.DataNetflix.rating).label("netflix_rating_sum")
-            ),
-        })
-
-        dict_maker = lambda p: {
-            'person_id' : p.person_id,
-            'role_type' : p.type,
-            'imdb_rating_sum' : p.imdb_rating_sum,
-            'imdb_votes_sum' : p.imdb_votes_sum,
-            'netflix_rating_sum' : p.netflix_rating_sum,
-            'titles_count' : p.titles_count,
-        }
-
-        persons = self.__s.query(model.Person.person_id,
-                                 model.Person.titles_count,
-                                 model.Person.imdb_rating_sum,
-                                 model.Person.imdb_votes_sum,
-                                 model.Person.netflix_rating_sum,
-                                 model.Role.type)\
-                          .join(model.Role)\
-                          .join(model.Title)\
-                          .join(model.DataImdb)\
-                          .join(model.DataNetflix)\
-                          .filter(model.DataImdb.votes >= 4000)\
-                          .filter(model.Title.type == 'film')\
-                          .filter(or_(model.Role.type == 'director', 
-                                      model.Role.billing <= 8))\
-                          .group_by(model.Person.person_id)\
-                          .group_by(model.Role.type)\
-                          .having(model.Person.titles_count >= 4)\
-                          .all()
+        rows = self.__s.query(model.Role.person_id,
+                              model.Role.type,
+                              model.Role.title_id,
+                              model.Title.year,
+                              model.DataImdb.rating,
+                              model.DataImdb.votes,
+                              model.DataNetflix.rating,
+                             )\
+                       .join(model.Title)\
+                       .join(model.DataImdb)\
+                       .join(model.DataNetflix)\
+                       .filter(model.DataImdb.votes >= 4000)\
+                       .all()
+                          #.filter(or_(model.Role.type == 'director', 
+                                      #model.Role.billing <= 8))\
 
         self.__db_close()
 
-        return [ dict_maker(p) for p in persons ]
+        person_roles = {}
+        for r in rows:
+            person_key = ( r[0], r[1] )
+            new_title = {
+                'id' : r[2],
+                'year' : r[3],
+                'imdb_rating' : r[4],
+                'imdb_votes' : r[5],
+                'netflix_rating' : r[6],
+            }
+            if person_key in person_roles:
+                person_roles[person_key].append(new_title)
+            else:
+                person_roles[person_key] = [ new_title ]
+
+        return person_roles
 
     def __get_model(self, model_class, row, search=None):
         if not search:
