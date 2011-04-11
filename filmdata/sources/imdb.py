@@ -154,11 +154,17 @@ class ImdbSource:
 
     def __fetch(self, name):
         dest = config.get('imdb', '%s_path' % name)
+        dest_dir = os.path.dirname(dest)
+        if not os.path.exists(dest_dir):
+            os.makedirs(dest_dir)
+
         url = config.get('imdb', '%s_url' % name)
-        dest_tmp = os.path.basename(url)
-        ret = os.system('wget -O %s %s' % (dest_tmp, url))
+        dest_gz = os.path.join(dest_dir, os.path.basename(url))
+        cmd = 'wget -O %s %s' % (dest_gz, url)
+        ret = os.system(cmd)
         if ret > 0:
             raise Exception('Error downloading file %s to %s' % (url, dest))
-        ret = os.system('gunzip -c %s > %s' % (dest_tmp, dest))
+        ret = os.system('gunzip -c %s > %s' % (dest_gz, dest))
         if ret > 0:
-            raise Exception('Error gunzipping file %s' % dest_tmp)
+            raise Exception('Error gunzipping file %s' % dest_gz)
+        ret = os.system('rm %s' % dest_gz)
