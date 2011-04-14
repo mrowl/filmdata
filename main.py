@@ -1,12 +1,11 @@
+#!/bin/python
 import logging, pkgutil, os
 from optparse import OptionParser
 
 from yapsy.PluginManager import PluginManager
 
-import filmdata.sources
-#from filmdata.sinks.mongo import MongoSink
-
 import filmdata
+import filmdata.sources
 from filmdata import config
 
 log = logging.getLogger('filmdata.main')

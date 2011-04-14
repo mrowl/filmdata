@@ -8,5 +8,11 @@ class TestNetflixFetch(mixins.FetchMixin, unittest.TestCase):
         self._name = 'netflix'
         self.setUpMixin()
 
+class TestNetflixProduce(mixins.ProduceMixin, unittest.TestCase):
+
+    def setUp(self):
+        self._name = 'netflix'
+        self.setUpMixin()
+
 if __name__ == '__main__':
     unittest.main()

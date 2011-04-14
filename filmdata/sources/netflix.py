@@ -5,6 +5,10 @@ from filmdata import config
 
 log = logging.getLogger(__name__)
 
+_source_max_rating = 5
+_global_max_rating = int(config.get('core', 'max_rating'))
+_rating_factor = _global_max_rating / _source_max_rating
+
 _titles_file_path = config.get('netflix', 'titles_xml_path')
 _titles_dir_path = config.get('netflix', 'titles_dir_path')
 
@@ -114,17 +118,13 @@ class Produce:
                 title_key = this._re_numeric_id.search(title['id']).group(1)
                 del title['id']
 
-                title_info = this._get_title_info(title_key)
-                if title_info:
-                    title_rating = decimal.Decimal(title_info['rating']) * 2
-                else:
-                    title_rating = 0
-                numbers = { 'rating' : title_rating, 'key' : int(title_key) }
-                yield [ title, [ 'netflix', numbers ] ]
+                data = { 'rating' : this._get_title_rating(title_key),
+                            'key' : int(title_key) }
+                yield [ title, [ 'netflix', data ] ]
         f.close()
 
     @classmethod
-    def _get_title_info(this, id):
+    def _get_title_rating(this, id):
         path = _get_title_path(id)
         if os.path.isfile(path):
             f = open(path, 'r')
@@ -132,7 +132,8 @@ class Produce:
             f.close()
             rating_match = this._re_title_rating.search(xml)
             rating = rating_match.group(1) if rating_match else 0
-            return { 'rating' : rating }
+            return decimal.Decimal(title_info['rating']) * _rating_factor
+        return 0
 
 if __name__ == '__main__':
     Fetch.fetch_data()

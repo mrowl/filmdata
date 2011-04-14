@@ -7,6 +7,10 @@ log = logging.getLogger(__name__)
 class UnzipError(Exception): pass
 class DownloadError(Exception): pass
 
+_source_max_rating = 10
+_global_max_rating = int(config.get('core', 'max_rating'))
+_rating_factor = _global_max_rating / _source_max_rating
+
 class Fetch:
 
     name = 'imdb'
@@ -71,9 +75,10 @@ class Produce:
                 if match:
                     title_key = this._parse_title_info(match.group(3))
                     if title_key and title_key['type'] in types:
+                        rating = decimal.Decimal(match.group(2))
                         yield [ title_key,
                                 [ 'imdb',
-                                  { 'rating' : decimal.Decimal(match.group(2)),
+                                  { 'rating' : rating * _rating_factor,
                                     'votes' : int(match.group(1)) } ] ]
 
     @classmethod

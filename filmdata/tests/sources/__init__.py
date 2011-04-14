@@ -40,10 +40,21 @@ class FetchMixin(object):
 
 class ProduceMixin(object):
 
-    def setUp(self):
+    def setUpMixin(self):
         source = __import__('filmdata.sources.%s' % self._name,
                             None, None, ['Produce'])
         self._produce = source.Produce
+
+    def test_produce_data(self):
+        for title, data in self._produce.produce_data(('film')):
+            self.assertEqual(len(title), 3)
+            for key in ('type', 'year', 'name'):
+                self.assertTrue(key in title)
+                self.assertFalse(title[key] is None)
+            self.assertEqual(len(data), 2)
+            self.assertEqual(data[0], self._name)
+            self.assertTrue('rating' in data[1])
+            self.assertFalse(data[1]['rating'] is None)
 
 if __name__ == '__main__':
     unittest.main()

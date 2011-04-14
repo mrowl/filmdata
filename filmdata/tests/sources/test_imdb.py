@@ -8,5 +8,11 @@ class TestImdbFetch(mixins.FetchMixin, unittest.TestCase):
         self._name = 'imdb'
         self.setUpMixin()
 
+class TestImdbProduce(mixins.ProduceMixin, unittest.TestCase):
+
+    def setUp(self):
+        self._name = 'imdb'
+        self.setUpMixin()
+
 if __name__ == '__main__':
     unittest.main()
