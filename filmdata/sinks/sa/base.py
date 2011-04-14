@@ -61,7 +61,7 @@ class SaSink:
 
         self.__db_close()
 
-    def consume_numbers(self, producer):
+    def consume_data(self, producer):
         i = 0
         for title, data in producer:
             i = self.__db_iter(i)

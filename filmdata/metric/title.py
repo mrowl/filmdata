@@ -17,9 +17,6 @@ class MetricTitle(IPlugin):
         'average_rating',
     )
 
-    def __init__(self):
-        pass
-
     def activate(self):
         data = Data(sink.get_titles_rating())
         data.add_field('average_rating', 

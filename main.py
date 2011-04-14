@@ -1,10 +1,9 @@
-import logging
+import logging, pkgutil, os
 from optparse import OptionParser
 
 from yapsy.PluginManager import PluginManager
 
-from filmdata.sources.netflix import NetflixSource
-from filmdata.sources.imdb import ImdbSource
+import filmdata.sources
 #from filmdata.sinks.mongo import MongoSink
 
 import filmdata
@@ -34,7 +33,7 @@ def run_data_fetch(source):
 
 def run_data_import(source, types):
     log.info('Importing data from source: %s' % source.name)
-    filmdata.sink.consume_numbers(source.produce_numbers(types))
+    filmdata.sink.consume_data(source.produce_data(types))
 
 def crunch(option, opt_str, value, parser):
     simplePluginManager = PluginManager()
@@ -43,7 +42,7 @@ def crunch(option, opt_str, value, parser):
     if value and value != 'all':
         names = value.split(',')
         for name in names:
-            simplePluginManager.activatePluginByName(name)
+            simplePluginManager.activatePluginByName(name.strip())
     else:
         for plugin in simplePluginManager.getAllPlugins():
             simplePluginManager.activatePluginByName(plugin.name)
@@ -54,6 +53,8 @@ def main():
         log.info('Sink set to SQLAlchemy, all data will be directed there!')
         filmdata.sink = Sink()
 
+    master_source_name = config.get('core', 'master_source')
+
     parser = OptionParser()
     parser.add_option("--sink-init", action="store_true",
                       dest="sink_init",
@@ -61,57 +62,31 @@ def main():
     parser.add_option("--sink-install", action="store_true",
                       dest="sink_install",
                       help="Install your chosen sink (i.e. build data(base|store) schema)")
-    #parser.add_option("--titles", action="append_const",
-                      #dest="titles_update",
-                      #help="Update the titles table (from IMDB)")
-    #parser.add_option("--actors", action="append_const",
-                      #dest="roles", const="actor"
-                      #help="Update the actors table (from IMDB)")
-    #parser.add_option("--actresses", action="append_const",
-                      #dest="roles", const="actress"
-                      #help="Update the actresses table (from IMDB)")
-    #parser.add_option("--directors", action="append_const",
-                      #dest="roles", const="actress"
-                      #help="Update the directors table (from IMDB)")
     parser.add_option("--roles", action="store_true",
                       dest="roles_both",
-                      help="Fetch and import all the active roles in the config (from IMDB)")
+                      help="Fetch and import all the active roles in the config (from %s)" % master_source_name)
     parser.add_option("--roles-fetch", action="store_true",
                       dest="roles_fetch",
-                      help="Fetch all the data for active roles in the config (from IMDB)")
+                      help="Fetch all the data for active roles in the config (from %s)" % master_source_name)
     parser.add_option("--roles-import", action="store_true",
                       dest="roles_import",
-                      help="Import all the data for active roles in the config (from IMDB)")
+                      help="Import all the data for active roles in the config (from %s)" % master_source_name)
     parser.add_option("--aka", action="store_true",
                       dest="aka_both",
-                      help="Fetch and import the aka titles data (from IMDB)")
+                      help="Fetch and import the aka titles data (from %s) % master_source_name")
     parser.add_option("--aka-fetch", action="store_true",
                       dest="aka_fetch",
-                      help="Fetch the aka titles data (from IMDB)")
+                      help="Fetch the aka titles data (from %s)" % master_source_name)
     parser.add_option("--aka-import", action="store_true",
                       dest="aka_import",
-                      help="Import the aka titles data (from IMDB)")
-    parser.add_option("-n", "--netflix", action="store_true",
-                      dest="netflix_both",
-                      help="Run both the netflix data fetch and import")
-    parser.add_option("--netflix-fetch", action="store_true",
-                      dest="netflix_fetch",
-                      help="Run the netflix data fetch")
-    parser.add_option("--netflix-import", action="store_true",
-                      dest="netflix_import",
-                      help="Run the netflix import")
-    parser.add_option("-i", "--imdb", action="store_true",
-                      dest="imdb_both",
-                      help="Run both the imdb data fetch and import")
-    parser.add_option("--imdb-fetch", action="store_true",
-                      dest="imdb_fetch",
-                      help="Run the imdb data fetch")
-    parser.add_option("--imdb-import", action="store_true",
-                      dest="imdb_import",
-                      help="Run the imdb import")
+                      help="Import the aka titles data (from %s)" % master_source_name)
     parser.add_option("-c", "--crunch", action="callback",
                       callback=crunch, type="string",
                       help="Run the numbers")
+    parser.add_option("-f", "--fetch", action="store", dest="fetches",
+                      help="Run data fetch for source(s) (comma separated)")
+    parser.add_option("-i", "--import", action="store", dest="imports",
+                      help="Run data import for source(s) (comma separated)")
 
     (options, args) = parser.parse_args()
     
@@ -120,45 +95,46 @@ def main():
     elif options.sink_install:
         filmdata.sink.install()
 
+    sources_path = [os.path.dirname(filmdata.sources.__file__)]
+    sources = [name for _, name, _ in pkgutil.iter_modules(sources_path)]
+
     active_role_types = config.get('core', 'active_role_types').split()
     active_title_types = config.get('core', 'active_title_types').split()
 
-    if options.netflix_both:
-        log.info('Running both the fetch and import for netflix...')
-        run_data_fetch(NetflixSource())
-        run_data_import(NetflixSource(), active_title_types)
-    elif options.netflix_fetch:
-        run_data_fetch(NetflixSource())
-    elif options.netflix_import:
-        run_data_import(NetflixSource(), active_title_types)
+    if options.fetches:
+        for name in options.fetches.split(','):
+            if name in sources:
+                source = __import__('filmdata.sources.%s' % name,
+                                    None, None, ['Fetch'])
+                run_data_fetch(source.Fetch)
 
-    if options.imdb_both:
-        log.info('Running both the fetch and import for imdb...')
-        run_data_fetch(ImdbSource())
-        run_data_import(ImdbSource(), active_title_types)
-    elif options.imdb_fetch:
-        run_data_fetch(ImdbSource())
-    elif options.imdb_import:
-        run_data_import(ImdbSource(), active_title_types)
+    if options.imports:
+        for name in options.imports.split(','):
+            if name in sources:
+                source = __import__('filmdata.sources.%s' % name,
+                                    None, None, ['Produce'])
+                run_data_import(source.Produce, active_title_types)
 
+    master_source = __import__('filmdata.sources.%s' % master_source_name,
+                               None, None, ['Fetch', 'Produce'])
     if options.aka_both:
         log.info('Running both the fetch and import for aka titles...')
-        run_aka_fetch(ImdbSource())
-        run_aka_import(ImdbSource(), active_title_types)
+        run_aka_fetch(master_source.Fetch)
+        run_aka_import(master_source.Produce, active_title_types)
     elif options.aka_fetch:
-        run_aka_fetch(ImdbSource())
+        run_aka_fetch(master_source.Fetch)
     elif options.aka_import:
-        run_aka_import(ImdbSource(), active_title_types)
+        run_aka_import(master_source.Produce, active_title_types)
 
     if options.roles_both:
         log.info('Running both the fetch and import for roles...')
-        run_roles_fetch(ImdbSource(), active_role_types)
-        run_roles_import(ImdbSource(), active_title_types,
+        run_roles_fetch(master_source.Fetch, active_role_types)
+        run_roles_import(master_source.Produce, active_title_types,
                          active_role_types)
     elif options.roles_fetch:
-        run_roles_fetch(ImdbSource(), active_role_types)
+        run_roles_fetch(master_source.Fetch, active_role_types)
     elif options.roles_import:
-        run_roles_import(ImdbSource(), active_title_types,
+        run_roles_import(master_source.Produce, active_title_types,
                          active_role_types)
 
 if __name__ == '__main__':
