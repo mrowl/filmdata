@@ -3,6 +3,7 @@ from nose.tools import nottest
 from nose.plugins.skip import SkipTest
 
 from filmdata import config
+import filmdata.sources
 
 log = logging.getLogger(__name__)
 
@@ -19,8 +20,7 @@ class FetchMixin(object):
     def setUpMixin(self):
         self._test_dir = config.get('test', 'test_data_dir')
         config.set('DEFAULT', 'data_dir', self._test_dir)
-        source = __import__('filmdata.sources.%s' % self._name,
-                            None, None, ['Fetch'])
+        source = filmdata.sources.load(self._name)
         self._fetch = source.Fetch
 
     def test_fetch_data(self):
@@ -41,20 +41,52 @@ class FetchMixin(object):
 class ProduceMixin(object):
 
     def setUpMixin(self):
-        source = __import__('filmdata.sources.%s' % self._name,
-                            None, None, ['Produce'])
+        source = filmdata.sources.load(self._name)
         self._produce = source.Produce
+        self._title_types = ('film',)
+
+    def _check_title_key(self, title):
+        self.assertEqual(len(title), 3)
+        for key in ('type', 'year', 'name'):
+            self.assertTrue(key in title)
+            self.assertFalse(title[key] is None)
+
 
     def test_produce_data(self):
-        for title, data in self._produce.produce_data(('film')):
-            self.assertEqual(len(title), 3)
-            for key in ('type', 'year', 'name'):
-                self.assertTrue(key in title)
-                self.assertFalse(title[key] is None)
+        for title, data in self._produce.produce_data(self._title_types):
+            self._check_title_key(title)
             self.assertEqual(len(data), 2)
             self.assertEqual(data[0], self._name)
             self.assertTrue('rating' in data[1])
             self.assertFalse(data[1]['rating'] is None)
+            self.assertTrue(data[1]['rating'] <= config.get('core',
+                                                            'max_rating'))
+            self.assertTrue(data[1]['rating'] >= 0)
+    
+    @only_master
+    def test_produce_roles(self):
+        role_types = ('actor', 'actress', 'director')
+        for role in self._produce.produce_roles(self._title_types, role_types):
+            self.assertEqual(len(role), 3)
+            self.assertFalse(role[0] is None)
+            self.assertFalse(role[1] is None)
+            self.assertFalse(role[2] is None)
+            self._check_title_key(role[0])
+
+            for k in ('type', 'character', 'billing'):
+                self.assertTrue(k in role[1])
+            self.assertTrue(role[1]['type'] in role_types)
+
+            self.assertTrue('name' in role[2])
+            self.assertFalse(role[2]['name'] is None)
+
+    @only_master
+    def test_produce_aka_titles(self):
+        for title, aka in self._produce.produce_aka_titles(self._title_types):
+            self._check_title_key(title)
+            for k in ('name', 'year', 'region'):
+                self.assertTrue(k in aka)
+                self.assertFalse(aka[k] is None)
 
 if __name__ == '__main__':
     unittest.main()

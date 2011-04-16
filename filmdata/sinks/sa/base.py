@@ -9,10 +9,6 @@ from filmdata import config
 log = logging.getLogger(__name__)
 
 class SaSink:
-    __data_classes = {
-        'imdb' : model.DataImdb,
-        'netflix' : model.DataNetflix,
-    }
 
     def __init__(self):
         model.init_model(create_engine(config.get('sqlalchemy', 'url')))
@@ -68,7 +64,7 @@ class SaSink:
 
             data_name = data[0]
             data_cols = data[1]
-            data_class = self.__data_classes[data_name]
+            data_class = model.data[data_name]
             primary_key = '_'.join(('data', data_name, 'id'))
             title_model = self.__get_model(model.Title, title)
             if not title_model.title_id:
@@ -155,7 +151,7 @@ class SaSink:
                          .options(orm.contains_eager(model.Title.data_netflix))\
                          .join(model.Title.data_imdb)\
                          .join(model.Title.data_netflix)\
-                         .filter(model.DataImdb.votes > 4000)\
+                         .filter(model.data.imdb.votes > 4000)\
                          .all()
 
         titles_rating =  [ dict_maker(t) for t in titles ]
@@ -170,17 +166,15 @@ class SaSink:
                               model.Role.title_id,
                               model.Title.year,
                               model.Role.billing,
-                              model.DataImdb.rating,
-                              model.DataImdb.votes,
-                              model.DataNetflix.rating,
+                              model.data.imdb.rating,
+                              model.data.imdb.votes,
+                              model.data.netflix.rating,
                              )\
                        .join(model.Title)\
-                       .join(model.DataImdb)\
-                       .join(model.DataNetflix)\
-                       .filter(model.DataImdb.votes >= 4000)\
+                       .join(model.data.imdb)\
+                       .join(model.data.netflix)\
+                       .filter(model.data.imdb.votes >= 4000)\
                        .all()
-                          #.filter(or_(model.Role.type == 'director', 
-                                      #model.Role.billing <= 8))\
 
         self.__db_close()
 

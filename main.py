@@ -1,11 +1,10 @@
 #!/bin/python
-import logging, pkgutil, os
+import logging
 from optparse import OptionParser
 
 from yapsy.PluginManager import PluginManager
 
 import filmdata
-import filmdata.sources
 from filmdata import config
 
 log = logging.getLogger('filmdata.main')
@@ -94,24 +93,19 @@ def main():
     elif options.sink_install:
         filmdata.sink.install()
 
-    sources_path = [os.path.dirname(filmdata.sources.__file__)]
-    sources = [name for _, name, _ in pkgutil.iter_modules(sources_path)]
-
     active_role_types = config.get('core', 'active_role_types').split()
     active_title_types = config.get('core', 'active_title_types').split()
 
     if options.fetches:
         for name in options.fetches.split(','):
-            if name in sources:
-                source = __import__('filmdata.sources.%s' % name,
-                                    None, None, ['Fetch'])
+            if name in filmdata.sources.list:
+                source = filmdata.sources.load(name)
                 run_data_fetch(source.Fetch)
 
     if options.imports:
         for name in options.imports.split(','):
-            if name in sources:
-                source = __import__('filmdata.sources.%s' % name,
-                                    None, None, ['Produce'])
+            if name in filmdata.sources.list:
+                source = filmdata.sources.load(name)
                 run_data_import(source.Produce, active_title_types)
 
     master_source = __import__('filmdata.sources.%s' % master_source_name,

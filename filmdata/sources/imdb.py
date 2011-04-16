@@ -1,4 +1,5 @@
 import logging, re, urllib, os, decimal
+import sqlalchemy as sa
 
 from filmdata import config
 
@@ -11,24 +12,23 @@ _source_max_rating = 10
 _global_max_rating = int(config.get('core', 'max_rating'))
 _rating_factor = _global_max_rating / _source_max_rating
 
+schema = [sa.Column('votes', sa.types.Integer)]
+
 class Fetch:
 
     name = 'imdb'
 
     @classmethod
     def fetch_data(this):
-        return
         this._fetch('rating')
 
     @classmethod
     def fetch_roles(this, roles):
-        return
         for role in roles:
             this._fetch(role)
 
     @classmethod
     def fetch_aka_titles(this):
-        return
         this._fetch('aka')
 
     @staticmethod
@@ -61,7 +61,7 @@ class Produce:
     _re_person_start = re.compile('^----\t\t\t------$')
     _re_character_role = re.compile('^(.+?)  (\[.+\])?\s*?(<[0-9]+>)?$')
     _re_person_name = re.compile('^(.*?)\t+(.*)$')
-    _re_title_info = re.compile('(.+?)\s+\(([0-9]{4}).*?\)\s?\(?(V|TV|VG)?.*$')
+    _re_title_info = re.compile('(.+?)\s+\(([0-9]{4}|\?\?\?\?).*?\)\s?\(?(V|TV|VG)?.*$')
     _re_aka_title = re.compile('^\s+\(aka (.+?) \(([0-9]{4})\)\)\s+\((.+?)\)')
 
     @classmethod
@@ -94,6 +94,8 @@ class Produce:
         log.info('Loading aka-titles from "%s"' % aka_path)
         f = open(aka_path, 'r')
         while not f.readline().strip() == 'AKA TITLES LIST':
+            pass
+        if f.readline().strip() == '===============':
             pass
 
         title_key = None
@@ -173,7 +175,7 @@ class Produce:
     @classmethod
     def _parse_title_info(this, title_string):
         match = this._re_title_info.match(title_string.strip())
-        if match:
+        if match and match.group(2) != '????':
             name = match.group(1)
             year = match.group(2)
             if (name[0] == '"' and name[-1] == '"') or match.group(3) == 'TV':
@@ -189,9 +191,12 @@ class Produce:
                 'name' : name.decode('latin_1'),
                 'year' : year,
                 'type' : type }
-
-        log.warn("Unable to parse title string %s" %
-                 title_string.decode('latin_1'))
+        elif match:
+            log.info("Title has unknown date, ignoring: %s" %
+                     title_string.decode('latin_1'))
+        else:
+            log.warn("Unable to parse title string %s" %
+                     title_string.decode('latin_1'))
         return None
 
 if __name__ == '__main__':
