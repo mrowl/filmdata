@@ -1,6 +1,5 @@
 import logging, re, time, HTMLParser, os, decimal
 import oauth2 as oauth
-import sqlalchemy as sa
 
 from filmdata import config
 
@@ -13,7 +12,7 @@ _rating_factor = _global_max_rating / _source_max_rating
 _titles_file_path = config.get('netflix', 'titles_xml_path')
 _titles_dir_path = config.get('netflix', 'titles_dir_path')
 
-schema = [sa.Column('key', sa.types.Integer)]
+schema = {'key' : 'integer'}
 
 def _get_title_path(id):
     basename = '.'.join((id, 'xml'))

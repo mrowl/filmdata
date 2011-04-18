@@ -15,7 +15,6 @@ setup(
     install_requires=[
         "SQLAlchemy>=0.6",
         "oauth2",
-        "yapsy",
     ],  
     dependency_links= ['https://github.com/simplegeo/python-oauth2/tarball/master#egg=oath2'],
     packages=find_packages(exclude=['ez_setup']),

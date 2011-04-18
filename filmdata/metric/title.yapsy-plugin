@@ -1,8 +1,0 @@
-[Core]
-Name = title
-Module = title
-
-[Documentation]
-Description = Builds metrics for the titles
-Author = scott
-Version = 0.1

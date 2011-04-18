@@ -8,6 +8,7 @@ from sqlalchemy import orm
 from sqlalchemy.ext.associationproxy import association_proxy
 
 import filmdata.sources
+import filmdata.metric
 from filmdata.sinks.sa import meta
 from filmdata.lib.dotdict import dotdict
 from filmdata.lib.sa import EnumIntType, table_class_init
@@ -81,86 +82,79 @@ role_table = sa.Table("role", meta.metadata,
     #sa.UniqueConstraint("title_id", name="freebase_title_link"),
     #)
 
-metric_title_table = sa.Table("metric_title", meta.metadata,
-    sa.Column("metric_title_id", sa.types.Integer, primary_key=True),
-    sa.Column("title_id", sa.types.Integer, sa.ForeignKey("title.title_id")),
-    sa.Column("imdb_rating", sa.types.Numeric(asdecimal=True)),
-    sa.Column("imdb_votes", sa.types.Integer),
-    sa.Column("imdb_bayes", sa.types.Numeric(asdecimal=True)),
-    sa.Column("netflix_rating", sa.types.Numeric(asdecimal=True)),
-    sa.Column("average_rating", sa.types.Numeric(asdecimal=True)),
-    sa.Column("created", sa.types.DateTime(), nullable=False,
-              default=datetime.datetime.now),
-    sa.Column("modified", sa.types.DateTime(), nullable=False,
-              default=datetime.datetime.now, onupdate=datetime.datetime.now),
-    )
 
-metric_person_role_table = sa.Table("metric_person_role", meta.metadata,
-    sa.Column("metric_person_role_id", sa.types.Integer, primary_key=True),
-    sa.Column("person_id", sa.types.Integer, sa.ForeignKey("person.person_id")),
-    sa.Column("role_type", EnumIntType(ROLE_TYPES), nullable=False),
-    sa.Column("titles_count", sa.types.Numeric(asdecimal=True)),
-    sa.Column("imdb_votes_sum", sa.types.Numeric(asdecimal=True)),
-    sa.Column("imdb_rating_mean", sa.types.Numeric(asdecimal=True)),
-    sa.Column("netflix_rating_mean", sa.types.Numeric(asdecimal=True)),
-    sa.Column("average_rating_mean", sa.types.Numeric(asdecimal=True)),
-    sa.Column("imdb_rating_median", sa.types.Numeric(asdecimal=True)),
-    sa.Column("netflix_rating_median", sa.types.Numeric(asdecimal=True)),
-    sa.Column("average_rating_median", sa.types.Numeric(asdecimal=True)),
-    sa.Column("imdb_rating_std", sa.types.Numeric(asdecimal=True)),
-    sa.Column("netflix_rating_std", sa.types.Numeric(asdecimal=True)),
-    sa.Column("average_rating_std", sa.types.Numeric(asdecimal=True)),
-    sa.Column("imdb_rating_slope", sa.types.Numeric(asdecimal=True)),
-    sa.Column("netflix_rating_slope", sa.types.Numeric(asdecimal=True)),
-    sa.Column("average_rating_slope", sa.types.Numeric(asdecimal=True)),
-    sa.Column("imdb_rating_bayes", sa.types.Numeric(asdecimal=True)),
-    sa.Column("netflix_rating_bayes", sa.types.Numeric(asdecimal=True)),
-    sa.Column("average_rating_bayes", sa.types.Numeric(asdecimal=True)),
-    sa.Column("created", sa.types.DateTime(), nullable=False,
-              default=datetime.datetime.now),
-    sa.Column("modified", sa.types.DateTime(), nullable=False,
-              default=datetime.datetime.now, onupdate=datetime.datetime.now),
-    )
+properties = {'title' : {}, 'person' : {}}
+#common_cols needs to be a function or else it will try to
+#apply the same col to multiple tables, illegal
+def dyna_tables(prefix, schemas, common_cols=None):
+    tables = {}
+    classes = dotdict()
 
-source_tables = {}
-data = dotdict()
-title_properties = {}
+    for name, schema in schemas:
+        table_name = '_'.join((prefix, name))
+        cols = [
+            sa.Column('_'.join((table_name, 'id')),
+                      sa.types.Integer, primary_key=True),
+        ]
+        if common_cols is not None:
+            cols.extend(common_cols())
 
-for source_name, source in filmdata.sources.iter():
-    cols = [
-        sa.Column("data_%s_id" % source_name,
-                  sa.types.Integer, primary_key=True),
-        sa.Column("title_id", sa.types.Integer,
-                  sa.ForeignKey("title.title_id")),
-        sa.Column("rating", sa.types.Numeric(asdecimal=True, scale=1)),
-    ]
-    cols.extend(source.schema)
-    cols.extend([
-        sa.Column("created", sa.types.DateTime(), nullable=False,
-                  default=datetime.datetime.now),
-        sa.Column("modified", sa.types.DateTime(), nullable=False,
-                  default=datetime.datetime.now,
-                  onupdate=datetime.datetime.now),
-        sa.UniqueConstraint("title_id", name="imdb_title_link"),
-    ])
+        for col_name, col_type in schema.iteritems():
+            if col_name == 'person' and col_type == 'id':
+                cols.append(sa.Column('person_id', sa.types.Integer,
+                                      sa.ForeignKey('person.person_id')))
+            elif col_name == 'title' and col_type == 'id':
+                cols.append(sa.Column('title_id', sa.types.Integer,
+                                      sa.ForeignKey('title.title_id')))
+            elif col_name == 'role_type' and col_type == None:
+                cols.append(sa.Column('role_type', EnumIntType(ROLE_TYPES),
+                                      nullable=False))
+            elif col_type == 'decimal':
+                cols.append(sa.Column(col_name,
+                                      sa.types.Numeric(asdecimal=True)))
+            elif col_type == 'integer':
+                cols.append(sa.Column(col_name, sa.types.Integer))
 
-    source_table_name = 'data_%s' % source_name
-    params = [source_table_name, meta.metadata]
-    params.extend(cols)
+        cols.extend([
+            sa.Column("created", sa.types.DateTime(), nullable=False,
+                      default=datetime.datetime.now),
+            sa.Column("modified", sa.types.DateTime(), nullable=False,
+                      default=datetime.datetime.now,
+                      onupdate=datetime.datetime.now),
+        ])
 
-    source_table_key = '%s_table' % source_table_name
-    source_tables[source_name] = sa.Table(*params)
+        params = [table_name, meta.metadata]
+        params.extend(cols)
 
-    source_class_name = 'Data%s' % source_name.capitalize()
-    data[source_name] = type(source_class_name,
-                             (object,),
+        tables[name] = sa.Table(*params)
+
+        class_name = ''.join((prefix.capitalize(), name.capitalize()))
+        classes[name] = type(class_name, (object,),
                              {'__init__' : table_class_init})
 
-    orm.mapper(data[source_name], source_tables[source_name])
-    title_properties[source_table_name] = orm.relation(data[source_name],
-                                                       uselist=False,
-                                                       backref='title')
+        # map the dynamic table to the class
+        orm.mapper(classes[name], tables[name])
 
+        for col in cols:
+            for k in properties.keys():
+                if col.name == '_'.join((k, 'id')):
+                    properties[k][table_name] = orm.relation(classes[name],
+                                                             uselist=False,
+                                                             backref=k)
+
+    return tables, classes
+
+def source_common_cols():
+    return [
+        sa.Column("title_id", sa.types.Integer,
+                  sa.ForeignKey("title.title_id"), unique=True),
+        sa.Column("rating", sa.types.Numeric(asdecimal=True, scale=1)),
+    ]
+source_schemas = [(n, s.schema) for n, s in filmdata.sources.manager.iter()]
+source_tables, source = dyna_tables('data', source_schemas, source_common_cols)
+
+metric_schemas = [(n, s.schema) for n, s in filmdata.metric.manager.iter()]
+metric_tables, metric = dyna_tables('metric', metric_schemas)
 
 class Person(object):
     titles = association_proxy('roles', 'title')
@@ -241,35 +235,13 @@ class Role(object):
         return "<Role('%s')>" % (self.type, self.character, self.billing,
                                  self.person_id, self.title_id)
 
-class MetricTitle(object):
 
-    def __init__(self, **kwargs):
-        for k,v in kwargs.iteritems():
-            setattr(self, k, v)
+properties['title']['roles'] = orm.relation(Role, backref='title') 
+properties['title']['aka_titles'] = orm.relation(AkaTitle, backref='title')
+orm.mapper(Title, title_table, properties=properties['title'])
 
-    def __repr__(self):
-        return "<MetricTitle('%s','%s','%s')>" % (self.title_id)
-
-class MetricPersonRole(object):
-
-    def __init__(self, **kwargs):
-        for k,v in kwargs.iteritems():
-            setattr(self, k, v)
-
-    def __repr__(self):
-        return "<MetricPersonRole('%s','%s','%s')>" % (self.person_id, self.type)
-
-
-title_properties['roles'] = orm.relation(Role, backref='title') 
-title_properties['aka_titles'] = orm.relation(AkaTitle, backref='title')
-orm.mapper(Title, title_table, properties=title_properties)
-
-orm.mapper(Person, person_table, properties={
-    'roles' : orm.relation(Role, backref='person'),
-    'metric_role' : orm.relation(MetricPersonRole, backref='person'),
-})
+properties['person']['roles'] = orm.relation(Role, backref='person')
+orm.mapper(Person, person_table, properties=properties['person'])
 
 orm.mapper(Role, role_table)
 orm.mapper(AkaTitle, aka_title_table)
-orm.mapper(MetricTitle, metric_title_table)
-orm.mapper(MetricPersonRole, metric_person_role_table)

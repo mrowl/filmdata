@@ -2,10 +2,9 @@
 import logging
 from optparse import OptionParser
 
-from yapsy.PluginManager import PluginManager
-
 import filmdata
 from filmdata import config
+from filmdata.metric import manager as metric_manager
 
 log = logging.getLogger('filmdata.main')
 
@@ -34,16 +33,14 @@ def run_data_import(source, types):
     filmdata.sink.consume_data(source.produce_data(types))
 
 def crunch(option, opt_str, value, parser):
-    simplePluginManager = PluginManager()
-    simplePluginManager.setPluginPlaces(["filmdata/metric"])
-    simplePluginManager.collectPlugins()
     if value and value != 'all':
         names = value.split(',')
         for name in names:
-            simplePluginManager.activatePluginByName(name.strip())
+            metric = metric_manager.load(name)
+            metric.run(filmdata.sink)
     else:
-        for plugin in simplePluginManager.getAllPlugins():
-            simplePluginManager.activatePluginByName(plugin.name)
+        for name, metric in metric_manager.iter():
+            metric.run(filmdata.sink)
 
 def main():
     if config.get('core', 'active_sink') == 'sqlalchemy':
@@ -98,15 +95,13 @@ def main():
 
     if options.fetches:
         for name in options.fetches.split(','):
-            if name in filmdata.sources.list:
-                source = filmdata.sources.load(name)
-                run_data_fetch(source.Fetch)
+            source = filmdata.sources.manager.load(name)
+            run_data_fetch(source.Fetch)
 
     if options.imports:
         for name in options.imports.split(','):
-            if name in filmdata.sources.list:
-                source = filmdata.sources.load(name)
-                run_data_import(source.Produce, active_title_types)
+            source = filmdata.sources.manager.load(name)
+            run_data_import(source.Produce, active_title_types)
 
     master_source = __import__('filmdata.sources.%s' % master_source_name,
                                None, None, ['Fetch', 'Produce'])

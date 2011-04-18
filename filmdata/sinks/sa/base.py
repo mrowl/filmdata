@@ -64,7 +64,7 @@ class SaSink:
 
             data_name = data[0]
             data_cols = data[1]
-            data_class = model.data[data_name]
+            data_class = model.source[data_name]
             primary_key = '_'.join(('data', data_name, 'id'))
             title_model = self.__get_model(model.Title, title)
             if not title_model.title_id:
@@ -108,21 +108,16 @@ class SaSink:
                 self.__s.add(aka_model)
         self.__db_close()
 
-    def consume_metric(self, producer, tbl_name, type=None):
+    def consume_metric(self, producer, name, type=None):
 
-        classes = {
-            'metric_title' : model.MetricTitle,
-            'metric_person_role' : model.MetricPersonRole,
-        }
-
-        tbl_model = classes[tbl_name]
+        tbl_model = model.metric[name]
 
         self.__db_open()
 
         if type:
             self.__s.query(tbl_model).filter(tbl_model.type == type).delete()
         else:
-            self.__s.execute("truncate %s restart identity" % (tbl_name))
+            self.__s.execute("truncate metric_%s restart identity" % (name))
         
         self.__db_close()
 
@@ -151,7 +146,7 @@ class SaSink:
                          .options(orm.contains_eager(model.Title.data_netflix))\
                          .join(model.Title.data_imdb)\
                          .join(model.Title.data_netflix)\
-                         .filter(model.data.imdb.votes > 4000)\
+                         .filter(model.source.imdb.votes > 4000)\
                          .all()
 
         titles_rating =  [ dict_maker(t) for t in titles ]
@@ -166,14 +161,14 @@ class SaSink:
                               model.Role.title_id,
                               model.Title.year,
                               model.Role.billing,
-                              model.data.imdb.rating,
-                              model.data.imdb.votes,
-                              model.data.netflix.rating,
+                              model.source.imdb.rating,
+                              model.source.imdb.votes,
+                              model.source.netflix.rating,
                              )\
                        .join(model.Title)\
-                       .join(model.data.imdb)\
-                       .join(model.data.netflix)\
-                       .filter(model.data.imdb.votes >= 4000)\
+                       .join(model.source.imdb)\
+                       .join(model.source.netflix)\
+                       .filter(model.source.imdb.votes >= 4000)\
                        .all()
 
         self.__db_close()
