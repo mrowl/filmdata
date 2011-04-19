@@ -133,23 +133,25 @@ class SaSink:
     def get_titles_rating(self):
         self.__db_open()
 
-        dict_maker = lambda t: {
-            'title_id' : t.title_id,
-            'imdb_rating' : t.data_imdb.rating,
-            'imdb_votes' : t.data_imdb.votes,
-            'netflix_rating' : t.data_netflix.rating,
+        #.filter(model.Title.type.in_(('film',)))\
+        rows = self.__s.query(model.Title.title_id,
+                              model.source.imdb.rating,
+                              model.source.imdb.votes,
+                              model.source.netflix.rating,
+                              )\
+                       .join(model.source.imdb)\
+                       .join(model.source.netflix)\
+                       .filter(model.source.imdb.votes > 4000)\
+                       .all()
+
+        dict_maker = lambda r: {
+            'title_id' : r[0],
+            'imdb_rating' : r[1],
+            'imdb_votes' : r[2],
+            'netflix_rating' : r[3],
         }
 
-        #.filter(model.Title.type.in_(('film',)))\
-        titles = self.__s.query(model.Title)\
-                         .options(orm.contains_eager(model.Title.data_imdb))\
-                         .options(orm.contains_eager(model.Title.data_netflix))\
-                         .join(model.Title.data_imdb)\
-                         .join(model.Title.data_netflix)\
-                         .filter(model.source.imdb.votes > 4000)\
-                         .all()
-
-        titles_rating =  [ dict_maker(t) for t in titles ]
+        titles_rating =  map(dict_maker, rows)
         self.__db_close()
         return titles_rating
 
