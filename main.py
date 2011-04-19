@@ -95,16 +95,16 @@ def main():
 
     if options.fetches:
         for name in options.fetches.split(','):
-            source = filmdata.sources.manager.load(name)
+            source = filmdata.source.manager.load(name)
             run_data_fetch(source.Fetch)
 
     if options.imports:
         for name in options.imports.split(','):
-            source = filmdata.sources.manager.load(name)
+            source = filmdata.source.manager.load(name)
             run_data_import(source.Produce, active_title_types)
 
-    master_source = __import__('filmdata.sources.%s' % master_source_name,
-                               None, None, ['Fetch', 'Produce'])
+    master_source = filmdata.source.manager.load(master_source_name)
+
     if options.aka_both:
         log.info('Running both the fetch and import for aka titles...')
         run_aka_fetch(master_source.Fetch)

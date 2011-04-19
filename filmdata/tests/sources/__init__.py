@@ -3,7 +3,7 @@ from nose.tools import nottest
 from nose.plugins.skip import SkipTest
 
 from filmdata import config
-import filmdata.sources
+import filmdata.source
 
 log = logging.getLogger(__name__)
 
@@ -20,7 +20,7 @@ class FetchMixin(object):
     def setUpMixin(self):
         self._test_dir = config.get('test', 'test_data_dir')
         config.set('DEFAULT', 'data_dir', self._test_dir)
-        source = filmdata.sources.manager.load(self._name)
+        source = filmdata.source.manager.load(self._name)
         self._fetch = source.Fetch
 
     def test_fetch_data(self):
@@ -41,7 +41,7 @@ class FetchMixin(object):
 class ProduceMixin(object):
 
     def setUpMixin(self):
-        source = filmdata.sources.manager.load(self._name)
+        source = filmdata.source.manager.load(self._name)
         self._produce = source.Produce
         self._title_types = ('film',)
 

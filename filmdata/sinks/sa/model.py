@@ -7,7 +7,7 @@ import sqlalchemy as sa
 from sqlalchemy import orm
 from sqlalchemy.ext.associationproxy import association_proxy
 
-import filmdata.sources
+import filmdata.source
 import filmdata.metric
 from filmdata.sinks.sa import meta
 from filmdata.lib.dotdict import dotdict
@@ -144,13 +144,11 @@ def dyna_tables(prefix, schemas, common_cols=None):
 
     return tables, classes
 
-def source_common_cols():
-    return [
-        sa.Column("title_id", sa.types.Integer,
-                  sa.ForeignKey("title.title_id"), unique=True),
-        sa.Column("rating", sa.types.Numeric(asdecimal=True, scale=1)),
-    ]
-source_schemas = [(n, s.schema) for n, s in filmdata.sources.manager.iter()]
+source_common_cols = lambda: [
+    sa.Column("title_id", sa.types.Integer,
+              sa.ForeignKey("title.title_id"), unique=True),
+    sa.Column("rating", sa.types.Numeric(asdecimal=True, scale=1))]
+source_schemas = [(n, s.schema) for n, s in filmdata.source.manager.iter()]
 source_tables, source = dyna_tables('data', source_schemas, source_common_cols)
 
 metric_schemas = [(n, s.schema) for n, s in filmdata.metric.manager.iter()]
