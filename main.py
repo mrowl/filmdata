@@ -1,4 +1,4 @@
-#!/bin/python
+#!/usr/bin/python
 import logging
 from optparse import OptionParser
 

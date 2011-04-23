@@ -12,7 +12,7 @@ _rating_factor = _global_max_rating / _source_max_rating
 _titles_file_path = config.get('netflix', 'titles_xml_path')
 _titles_dir_path = config.get('netflix', 'titles_dir_path')
 
-schema = {'key' : 'integer'}
+schema = {'rating' : None, 'key' : 'integer'}
 
 def _get_title_path(id):
     basename = '.'.join((id, 'xml'))

@@ -12,7 +12,7 @@ _source_max_rating = 10
 _global_max_rating = int(config.get('core', 'max_rating'))
 _rating_factor = _global_max_rating / _source_max_rating
 
-schema = {'votes' : 'integer'}
+schema = {'rating' : None, 'votes' : 'integer'}
 
 class Fetch:
 

@@ -9,6 +9,7 @@ from sqlalchemy.ext.associationproxy import association_proxy
 
 import filmdata.source
 import filmdata.metric
+from filmdata import config
 from filmdata.sinks.sa import meta
 from filmdata.lib.dotdict import dotdict
 from filmdata.lib.sa import EnumIntType, table_class_init
@@ -71,18 +72,6 @@ role_table = sa.Table("role", meta.metadata,
                         name="person_title_link"),
     )
 
-#data_freebase_table = sa.Table("data_freebase", meta.metadata,
-    #sa.Column("data_freebase_id", sa.types.Integer, primary_key=True),
-    #sa.Column("title_id", sa.types.Integer, sa.ForeignKey("title.title_id")),
-    #sa.Column("freebase_key", UUID()),
-    #sa.Column("created", sa.types.DateTime(), nullable=False,
-              #default=datetime.datetime.now),
-    #sa.Column("modified", sa.types.DateTime(), nullable=False,
-              #default=datetime.datetime.now, onupdate=datetime.datetime.now),
-    #sa.UniqueConstraint("title_id", name="freebase_title_link"),
-    #)
-
-
 properties = {'title' : {}, 'person' : {}}
 #common_cols needs to be a function or else it will try to
 #apply the same col to multiple tables, illegal
@@ -100,15 +89,19 @@ def dyna_tables(prefix, schemas, common_cols=None):
             cols.extend(common_cols())
 
         for col_name, col_type in schema.iteritems():
-            if col_name == 'person' and col_type == 'id':
+            if col_name == 'person_id' and col_type == 'id':
                 cols.append(sa.Column('person_id', sa.types.Integer,
                                       sa.ForeignKey('person.person_id')))
-            elif col_name == 'title' and col_type == 'id':
+            elif col_name == 'title_id' and col_type == 'id':
                 cols.append(sa.Column('title_id', sa.types.Integer,
                                       sa.ForeignKey('title.title_id')))
-            elif col_name == 'role_type' and col_type == None:
+            elif col_name == 'role_type' and col_type is None:
                 cols.append(sa.Column('role_type', EnumIntType(ROLE_TYPES),
                                       nullable=False))
+            elif col_name == 'rating' and col_type is None:
+                cols.append(sa.Column('rating',
+                                      sa.types.Numeric(asdecimal=True,
+                                                       scale=1)))
             elif col_type == 'decimal':
                 cols.append(sa.Column(col_name,
                                       sa.types.Numeric(asdecimal=True)))
@@ -144,15 +137,35 @@ def dyna_tables(prefix, schemas, common_cols=None):
 
     return tables, classes
 
+metric_schemas = [(n, s.schema) for n, s in filmdata.metric.manager.iter()]
+metric_tables, metric = dyna_tables('metric', metric_schemas)
+
 source_common_cols = lambda: [
     sa.Column("title_id", sa.types.Integer,
-              sa.ForeignKey("title.title_id"), unique=True),
-    sa.Column("rating", sa.types.Numeric(asdecimal=True, scale=1))]
+              sa.ForeignKey("title.title_id"), unique=True)]
+    
 source_schemas = [(n, s.schema) for n, s in filmdata.source.manager.iter()]
 source_tables, source = dyna_tables('data', source_schemas, source_common_cols)
 
-metric_schemas = [(n, s.schema) for n, s in filmdata.metric.manager.iter()]
-metric_tables, metric = dyna_tables('metric', metric_schemas)
+culler = source[config.get('core', 'master_data')]
+
+data_tables = []
+data_cols = []
+data_keys = []
+for source_name, source_class in source.iteritems():
+    data_tables.append(source_class)
+    for data_type in ('rating', 'votes'):
+        if hasattr(source_class, data_type):
+            data_cols.append(getattr(source_class, data_type))
+            data_keys.append((source_name, data_type))
+data_dicter = lambda r, o:\
+    dict([ ('_'.join(k), r[o + i]) for i, k in enumerate(data_keys) ])
+#def data_dicter(row, offset):
+#    data = defaultdict(dict)
+#    for i, (source_name, col_name) in enumerate(data_keys):
+#        data[source_name][col_name] = row[offset + i]
+#    return data
+
 
 class Person(object):
     titles = association_proxy('roles', 'title')

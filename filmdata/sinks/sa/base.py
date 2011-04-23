@@ -130,28 +130,22 @@ class SaSink:
 
         self.__db_close()
 
-    def get_titles_rating(self):
+    def get_titles_rating(self, min_votes=0):
         self.__db_open()
 
-        #.filter(model.Title.type.in_(('film',)))\
         rows = self.__s.query(model.Title.title_id,
-                              model.source.imdb.rating,
-                              model.source.imdb.votes,
-                              model.source.netflix.rating,
-                              )\
-                       .join(model.source.imdb)\
-                       .join(model.source.netflix)\
-                       .filter(model.source.imdb.votes > 4000)\
+                              *model.data_cols
+                             )\
+                       .join(*model.data_tables)\
+                       .filter(model.culler.votes >= min_votes)\
                        .all()
 
-        dict_maker = lambda r: {
-            'title_id' : r[0],
-            'imdb_rating' : r[1],
-            'imdb_votes' : r[2],
-            'netflix_rating' : r[3],
-        }
+        titles_rating = []
+        for r in rows:
+            title = { 'title_id' : r[0] }
+            title.update(model.data_dicter(r, 1))
+            titles_rating.append(title)
 
-        titles_rating =  map(dict_maker, rows)
         self.__db_close()
         return titles_rating
 
@@ -163,14 +157,10 @@ class SaSink:
                               model.Role.title_id,
                               model.Title.year,
                               model.Role.billing,
-                              model.source.imdb.rating,
-                              model.source.imdb.votes,
-                              model.source.netflix.rating,
+                              *model.data_cols
                              )\
-                       .join(model.Title)\
-                       .join(model.source.imdb)\
-                       .join(model.source.netflix)\
-                       .filter(model.source.imdb.votes >= 4000)\
+                       .join(model.Title, *model.data_tables)\
+                       .filter(model.culler.votes >= 4000)\
                        .all()
 
         self.__db_close()
@@ -182,10 +172,8 @@ class SaSink:
                 'id' : r[2],
                 'year' : r[3],
                 'billing' : r[4],
-                'imdb_rating' : r[5],
-                'imdb_votes' : r[6],
-                'netflix_rating' : r[7],
             }
+            new_title.update(model.data_dicter(r, 5))
             if person_key in person_roles:
                 person_roles[person_key].append(new_title)
             else:
