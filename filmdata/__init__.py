@@ -11,4 +11,3 @@ else:
     config = None
 
 sink = None
-data_keys = None

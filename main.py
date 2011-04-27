@@ -53,10 +53,12 @@ def main():
     parser = OptionParser()
     parser.add_option("--sink-init", action="store_true",
                       dest="sink_init",
-                      help="Initialize your chosen sink (i.e. destroy data and build data(base|store) schema)")
+                      help="""Initialize your chosen sink (i.e. destroy data
+                              and build data(base|store) schema)""")
     parser.add_option("--sink-install", action="store_true",
                       dest="sink_install",
-                      help="Install your chosen sink (i.e. build data(base|store) schema)")
+                      help="""Install your chosen sink
+                      (i.e. build data(base|store) schema)""")
     parser.add_option("--roles", action="store_true",
                       dest="roles_both",
                       help="Fetch and import all the active roles in the config (from %s)" % master_source_name)

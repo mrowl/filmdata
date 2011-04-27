@@ -73,7 +73,8 @@ class Data:
 
     def add_average(self, fields, name='average'):
         for i in range(0, len(self.rows)):
-            self.rows[i][name] = sum([self.rows[i][f] for f in fields]) / len(fields)
+            self.rows[i][name] = sum([self.rows[i][f] for f in fields])\
+                / len(fields)
 
     @memoize
     def get_sum(self, field):

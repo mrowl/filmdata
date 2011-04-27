@@ -20,23 +20,28 @@ schema = {
 }
 
 _data_keys = { 'rating' : {} }
-_metric_keys = { 'average' : {} }
+
+# find all the ratings in the sources and add them to our list
 for source_name, source in filmdata.source.manager.iter():
     if 'rating' in source.schema:
+        _data_keys['rating'][source_name] = '_'.join((source_name, 'rating'))
+
+# check for multiple sources with ratings
+# if true add a new 'average' pseudo source
+for field, sources in _data_keys.iteritems():
+    if len(sources) > 1:
+        _data_keys['rating']['average'] = 'average_rating'
+
+# generate the schema from this list
+for data_type, data_sources in _data_keys.iteritems():
+    for source_name, data_key in data_sources.iteritems():
         for metric_type in ('mean', 'median', 'std', 'slope', 'bayes'):
             schema_key = '_'.join((source_name, 'rating', metric_type))
             schema[schema_key] = 'decimal'
-        _data_keys['rating'][source_name] = '_'.join((source_name, 'rating'))
-
-for field, sources in _data_keys.iteritems():
-    if len(sources) > 1:
-        for metric_type in ('mean', 'median', 'std', 'slope', 'bayes'):
-            schema_key = '_'.join(('average', field, metric_type))
-            schema[schema_key] = 'decimal'
-        _metric_keys['average'][field] = '_'.join(('average', field))
 
 def run(sink):
     data_rows = []
+    interdict = lambda row, cols: [ row[c] for c in cols if c in row ]
     for k, titles_all in sink.get_persons_role_titles().iteritems():
         if len(titles_all) < 4:
             continue
@@ -58,20 +63,21 @@ def run(sink):
         title_arrays = {}
         for data_type, data_sources in _data_keys.iteritems():
             for source_name, data_key in data_sources.iteritems():
-                title_arrays[data_key] = [ float(t[data_key]) for t
-                                           in titles_filtered ]
-        interdict = lambda row, cols: [ row[c] for c in cols if c in row ]
-        for metric_type, metric_sources in _metric_keys.iteritems():
-            for source_name, metric_key in metric_sources.iteritems():
-                if metric_type == 'average':
-                    title_arrays[metric_key] = [ float(avg(interdict(t, _data_keys[source_name].values()))) for t in titles_filtered ]
+                if source_name == 'average':
+                    title_arrays[data_key] = [
+                        float(avg(interdict(t,
+                                            _data_keys[data_type].values())))
+                        for t in titles_filtered ]
+                else:
+                    title_arrays[data_key] = [ float(t[data_key]) for t
+                                               in titles_filtered ]
 
         titles_count = len(titles_filtered)
 
         row = {
             'person_id' : k[0],
             'role_type' : k[1],
-            'titles_count' : len(titles_filtered),
+            'titles_count' : titles_count,
             '_'.join((_cull_key, 'sum')) : sum([ t[_cull_key] for t in
                                                 titles_filtered ]),
         }
