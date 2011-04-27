@@ -39,59 +39,72 @@ for data_type, data_sources in _data_keys.iteritems():
             schema_key = '_'.join((source_name, 'rating', metric_type))
             schema[schema_key] = 'decimal'
 
+interdict = lambda row, cols: [ row[c] for c in cols if c in row ]
+
+def titles_filter(titles, role, min=None):
+    if min and len(titles) < min:
+        return None
+    return [ t for t in titles
+             if ( t[_cull_key] > 4000 and
+                 ( role == 'director' or
+                  ( t['billing'] and t['billing'] <= 8 ) ) ) ]
+
+def is_solid_role(role, titles):
+    if role != 'director':
+        if len(titles) < 6:
+            return False
+        titles_top_bill = [ t for t
+                            in titles if t['billing'] == 1 ]
+        if len(titles_top_bill) < 2:
+            return False
+    elif len(titles) < 4:
+        return False
+    return True
+
+def persons_filter(persons):
+    for person_key, titles_all in persons.iteritems():
+        role = person_key[1]
+        titles_filtered = titles_filter(titles_all, role, 4)
+        if titles_filtered and is_solid_role(person_key[1], titles_filtered):
+            yield person_key, titles_filtered
+
+def get_title_data(titles):
+    for data_type, data_sources in _data_keys.iteritems():
+        for source_name, data_key in data_sources.iteritems():
+            if source_name == 'average':
+                yield data_key, [
+                    float(avg(interdict(t,
+                                        _data_keys[data_type].values())))
+                    for t in titles ]
+            else:
+                yield data_key, [ float(t[data_key]) for t in titles ]
+
+def get_title_metrics(data):
+    name, values = data
+    return {
+        '%s_mean' % name : numpy.mean(values),
+        '%s_median' % name : numpy.median(values),
+        '%s_std' % name : numpy.std(values),
+        '%s_slope' % name : stats.linregress(range(0, len(values)), values)[0],
+    }
+
 def run(sink):
     data_rows = []
-    interdict = lambda row, cols: [ row[c] for c in cols if c in row ]
-    for k, titles_all in sink.get_persons_role_titles().iteritems():
-        if len(titles_all) < 4:
-            continue
-        titles_filtered = [ t for t in titles_all
-                            if t[_cull_key] > 4000
-                            and (k[1] == 'director'
-                                 or (t['billing'] and t['billing'] <= 8)) ]
-        if k[1] != 'director':
-            if len(titles_filtered) < 6:
-                continue
-            titles_top_bill = [ t for t in titles_filtered if t['billing'] == 1 ]
-            if len(titles_top_bill) < 2:
-                continue
-        else:
-            if len(titles_filtered) < 4:
-                continue
-
-        titles_filtered.sort(key=operator.itemgetter('year'))
-        title_arrays = {}
-        for data_type, data_sources in _data_keys.iteritems():
-            for source_name, data_key in data_sources.iteritems():
-                if source_name == 'average':
-                    title_arrays[data_key] = [
-                        float(avg(interdict(t,
-                                            _data_keys[data_type].values())))
-                        for t in titles_filtered ]
-                else:
-                    title_arrays[data_key] = [ float(t[data_key]) for t
-                                               in titles_filtered ]
-
-        titles_count = len(titles_filtered)
+    for k, titles in persons_filter(sink.get_persons_role_titles()):
+        titles.sort(key=operator.itemgetter('year'))
 
         row = {
             'person_id' : k[0],
             'role_type' : k[1],
-            'titles_count' : titles_count,
+            'titles_count' : len(titles),
             '_'.join((_cull_key, 'sum')) : sum([ t[_cull_key] for t in
-                                                titles_filtered ]),
+                                                titles ]),
         }
 
-        for name, values in title_arrays.iteritems():
-            row['%s_mean' % name] = numpy.mean(values)
-            row['%s_median' % name] = numpy.median(values)
-            row['%s_std' % name] = numpy.std(values)
-            row['%s_slope' % name] = stats.linregress(range(0, titles_count),
-                                                      values)[0]
-
+        row.update(reduce(lambda d1, d2: dict(d1.items() + d2.items()),
+                          map(get_title_metrics, get_title_data(titles))))
         data_rows.append(row)
 
-    log.info('%d rows for person_role' % len(data_rows))
     data = Data(data_rows)
     for data_type, data_sources in _data_keys.iteritems():
         for source_name, data_key in data_sources.iteritems():
