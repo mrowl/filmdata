@@ -11,7 +11,7 @@ log = logging.getLogger(__name__)
 class SaSink:
 
     def __init__(self):
-        model.init_model(create_engine(config.get('sqlalchemy', 'url')))
+        model.init_model(create_engine(config.sqlalchemy.url))
         self.__s = None #sqlalchemy session
 
     def setup(self):

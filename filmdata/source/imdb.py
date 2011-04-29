@@ -9,10 +9,14 @@ class UnzipError(Exception): pass
 class DownloadError(Exception): pass
 
 _source_max_rating = 10
-_global_max_rating = int(config.get('core', 'max_rating'))
+_global_max_rating = int(config.core.max_rating)
 _rating_factor = _global_max_rating / _source_max_rating
 
-schema = {'rating' : None, 'votes' : 'integer'}
+schema = {
+    'title_id' : 'id',
+    'rating' : None,
+    'votes' : 'integer',
+}
 
 class Fetch:
 
@@ -33,12 +37,12 @@ class Fetch:
 
     @staticmethod
     def _fetch(name):
-        dest = config.get('imdb', '%s_path' % name)
+        dest = config.imdb['%s_path' % name]
         dest_dir = os.path.dirname(dest)
         if not os.path.exists(dest_dir):
             os.makedirs(dest_dir)
 
-        url = config.get('imdb', '%s_url' % name)
+        url = config.imdb['%s_url' % name]
         dest_gz = os.path.join(dest_dir, os.path.basename(url))
         cmd = 'wget -O %s %s' % (dest_gz, url)
         ret = os.system(cmd)
@@ -67,7 +71,7 @@ class Produce:
     @classmethod
     def produce_data(this, types):
         started = 0
-        for line in open(config.get('imdb', 'rating_path')):
+        for line in open(config.imdb.rating_path):
             if not started:
                 started = 1 if line.strip() == 'MOVIE RATINGS REPORT' else 0
             else:
@@ -90,7 +94,7 @@ class Produce:
 
     @classmethod
     def produce_aka_titles(this, types):
-        aka_path = config.get('imdb', 'aka_path')
+        aka_path = config.imdb.aka_path
         log.info('Loading aka-titles from "%s"' % aka_path)
         f = open(aka_path, 'r')
         while not f.readline().strip() == 'AKA TITLES LIST':
@@ -126,7 +130,7 @@ class Produce:
         person_name = None
         person_info = []
 
-        type_path = config.get('imdb', '%s_path' % type)
+        type_path = config.imdb['%s_path' % type]
         log.info('Loading roles for "%s" from %s' % (type, type_path))
         f = open(type_path, 'r')
         while not this._re_person_start.match(f.readline()):

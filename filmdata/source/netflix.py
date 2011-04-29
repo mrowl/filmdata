@@ -6,13 +6,17 @@ from filmdata import config
 log = logging.getLogger(__name__)
 
 _source_max_rating = 5
-_global_max_rating = int(config.get('core', 'max_rating'))
+_global_max_rating = int(config.core.max_rating)
 _rating_factor = _global_max_rating / _source_max_rating
 
-_titles_file_path = config.get('netflix', 'titles_xml_path')
-_titles_dir_path = config.get('netflix', 'titles_dir_path')
+_titles_file_path = config.netflix.titles_xml_path
+_titles_dir_path = config.netflix.titles_dir_path
 
-schema = {'rating' : None, 'key' : 'integer'}
+schema = {
+    'title_id' : 'id',
+    'rating' : None,
+    'key' : 'integer',
+}
 
 def _get_title_path(id):
     basename = '.'.join((id, 'xml'))
@@ -23,10 +27,10 @@ def _get_title_path(id):
 class Fetch:
 
     name = 'netflix'
-    _consumer_key = config.get('netflix', 'consumer_key')
-    _consumer_secret = config.get('netflix', 'consumer_secret')
-    _titles_url = config.get('netflix', 'titles_url')
-    _title_url_base = config.get('netflix', 'title_url_base')
+    _consumer_key = config.netflix.consumer_key
+    _consumer_secret = config.netflix.consumer_secret
+    _titles_url = config.netflix.titles_url
+    _title_url_base = config.netflix.title_url_base
     _call_limit = 4900
 
     @classmethod

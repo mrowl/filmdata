@@ -12,10 +12,7 @@ import filmdata.metric
 from filmdata import config
 from filmdata.sinks.sa import meta
 from filmdata.lib.dotdict import dotdict
-from filmdata.lib.sa import EnumIntType, table_class_init
-
-TITLE_TYPES = ('film', 'tv')
-ROLE_TYPES = ('director', 'actor', 'actress', 'producer', 'writer')
+from filmdata.lib.sa import EnumIntType, DynamicModel
 
 def init_model(engine):
     """Call me before using any of the tables or classes in the model"""
@@ -36,7 +33,7 @@ title_table = sa.Table("title", meta.metadata,
     sa.Column("title_id", sa.types.Integer, primary_key=True),
     sa.Column("name", sa.types.Unicode(255), nullable=False),
     sa.Column("year", sa.types.SmallInteger, nullable=False),
-    sa.Column("type", EnumIntType(TITLE_TYPES), nullable=False),
+    sa.Column("type", EnumIntType(config.TITLE_TYPES), nullable=False),
     sa.Column("created", sa.types.DateTime(), nullable=False,
               default=datetime.datetime.now),
     sa.Column("modified", sa.types.DateTime(), nullable=False,
@@ -61,7 +58,7 @@ role_table = sa.Table("role", meta.metadata,
     sa.Column("role_id", sa.types.Integer, primary_key=True),
     sa.Column("person_id", sa.types.Integer, sa.ForeignKey("person.person_id")),
     sa.Column("title_id", sa.types.Integer, sa.ForeignKey("title.title_id")),
-    sa.Column("type", EnumIntType(ROLE_TYPES), nullable=False),
+    sa.Column("type", EnumIntType(config.ROLE_TYPES), nullable=False),
     sa.Column("character", sa.types.Unicode(1023), nullable=True),
     sa.Column("billing", sa.types.SmallInteger, nullable=True, default=0),
     sa.Column("created", sa.types.DateTime(), nullable=False,
@@ -72,82 +69,42 @@ role_table = sa.Table("role", meta.metadata,
                         name="person_title_link"),
     )
 
+# definitions for building dynamic tables for the plugin packages (metric,
+# source) value is a tuple with the schemas and the seeder callback for making 
+# columns that are common between all the plugin modules in that package.
+plugin_pkgs = {
+    'metric' : ([(n, s.schema) for n, s in filmdata.metric.manager.iter()],
+                None),
+    'source' : ([(n, s.schema) for n, s in filmdata.source.manager.iter()],
+                None),
+}
+
+# properties for the foreign relations (see bottom of this file)
 properties = {'title' : {}, 'person' : {}}
-#common_cols needs to be a function or else it will try to
-#apply the same col to multiple tables, illegal
-def dyna_tables(prefix, schemas, common_cols=None):
+
+for pkg_name, structures in plugin_pkgs.items():
+    schemas, common_cols = structures
+
     tables = {}
-    classes = dotdict()
-
+    models = dotdict()
     for name, schema in schemas:
-        table_name = '_'.join((prefix, name))
-        cols = [
-            sa.Column('_'.join((table_name, 'id')),
-                      sa.types.Integer, primary_key=True),
-        ]
-        if common_cols is not None:
-            cols.extend(common_cols())
+        dyna_model = DynamicModel(pkg_name, name, schema, meta, common_cols)
+        tables[name] = dyna_model.table
+        models[name] = dyna_model.model
 
-        for col_name, col_type in schema.iteritems():
-            if col_name == 'person_id' and col_type == 'id':
-                cols.append(sa.Column('person_id', sa.types.Integer,
-                                      sa.ForeignKey('person.person_id')))
-            elif col_name == 'title_id' and col_type == 'id':
-                cols.append(sa.Column('title_id', sa.types.Integer,
-                                      sa.ForeignKey('title.title_id')))
-            elif col_name == 'role_type' and col_type is None:
-                cols.append(sa.Column('role_type', EnumIntType(ROLE_TYPES),
-                                      nullable=False))
-            elif col_name == 'rating' and col_type is None:
-                cols.append(sa.Column('rating',
-                                      sa.types.Numeric(asdecimal=True,
-                                                       scale=1)))
-            elif col_type == 'decimal':
-                cols.append(sa.Column(col_name,
-                                      sa.types.Numeric(asdecimal=True)))
-            elif col_type == 'integer':
-                cols.append(sa.Column(col_name, sa.types.Integer))
+        for relation_name in properties.keys():
+            relation = dyna_model.get_relation(relation_name)
+            if relation is not None:
+                properties[relation_name][dyna_model.table_name] = relation
 
-        cols.extend([
-            sa.Column("created", sa.types.DateTime(), nullable=False,
-                      default=datetime.datetime.now),
-            sa.Column("modified", sa.types.DateTime(), nullable=False,
-                      default=datetime.datetime.now,
-                      onupdate=datetime.datetime.now),
-        ])
+    if pkg_name == 'metric': 
+        metric = models
+        metric_tables = tables
+    elif pkg_name == 'source': 
+        source = models
+        source_tables = tables
 
-        params = [table_name, meta.metadata]
-        params.extend(cols)
-
-        tables[name] = sa.Table(*params)
-
-        class_name = ''.join((prefix.capitalize(), name.capitalize()))
-        classes[name] = type(class_name, (object,),
-                             {'__init__' : table_class_init})
-
-        # map the dynamic table to the class
-        orm.mapper(classes[name], tables[name])
-
-        for col in cols:
-            for k in properties.keys():
-                if col.name == '_'.join((k, 'id')):
-                    properties[k][table_name] = orm.relation(classes[name],
-                                                             uselist=False,
-                                                             backref=k)
-
-    return tables, classes
-
-metric_schemas = [(n, s.schema) for n, s in filmdata.metric.manager.iter()]
-metric_tables, metric = dyna_tables('metric', metric_schemas)
-
-source_common_cols = lambda: [
-    sa.Column("title_id", sa.types.Integer,
-              sa.ForeignKey("title.title_id"), unique=True)]
-    
-source_schemas = [(n, s.schema) for n, s in filmdata.source.manager.iter()]
-source_tables, source = dyna_tables('data', source_schemas, source_common_cols)
-
-culler = source[config.get('core', 'master_data')]
+culler = source[config.core.master_data]
 
 data_tables = []
 data_cols = []
@@ -158,13 +115,9 @@ for source_name, source_class in source.iteritems():
         if hasattr(source_class, data_type):
             data_cols.append(getattr(source_class, data_type))
             data_keys.append((source_name, data_type))
-data_dicter = lambda r, o:\
-    dict([ ('_'.join(k), r[o + i]) for i, k in enumerate(data_keys) ])
-#def data_dicter(row, offset):
-#    data = defaultdict(dict)
-#    for i, (source_name, col_name) in enumerate(data_keys):
-#        data[source_name][col_name] = row[offset + i]
-#    return data
+
+data_dicter = lambda r, o: dict([ ('_'.join(k), r[o + i]) for
+                                  i, k in enumerate(data_keys) ])
 
 
 class Person(object):

@@ -9,17 +9,17 @@ log = logging.getLogger(__name__)
 
 def only_master(meth):
     def test_only_master_wrapper(self):
-        if config.get('core', 'master_source') != self._name:
+        if config.core.master_source != self._name:
             raise SkipTest
         return meth(self)
     return test_only_master_wrapper
 
 class FetchMixin(object):
-    __test__ = config.get('test', 'fetch').lower() == 'true'
+    __test__ = config.test.fetch.lower() == 'true'
 
     def setUpMixin(self):
-        self._test_dir = config.get('test', 'test_data_dir')
-        config.set('DEFAULT', 'data_dir', self._test_dir)
+        self._test_dir = config.test.test_data_dir
+        config['DEFAULT']['data_dir'] = self._test_dir
         source = filmdata.source.manager.load(self._name)
         self._fetch = source.Fetch
 
@@ -59,8 +59,7 @@ class ProduceMixin(object):
             self.assertEqual(data[0], self._name)
             self.assertTrue('rating' in data[1])
             self.assertFalse(data[1]['rating'] is None)
-            self.assertTrue(data[1]['rating'] <= config.get('core',
-                                                            'max_rating'))
+            self.assertTrue(data[1]['rating'] <= config.core.max_rating)
             self.assertTrue(data[1]['rating'] >= 0)
     
     @only_master

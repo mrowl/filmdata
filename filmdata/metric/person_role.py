@@ -11,7 +11,7 @@ type = 'title'
 subtype = 'by ratings'
 title = 'top titles by vote ratings'
 description = 'calculates the average rating for each title'
-_cull_key = '_'.join((config.get('core', 'master_data'), 'votes'))
+_cull_key = '_'.join((config.core.master_data, 'votes'))
 schema = {
     'person_id' : 'id',
     'role_type' : None,

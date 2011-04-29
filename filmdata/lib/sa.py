@@ -3,8 +3,10 @@ Some SQLAlchemy helpers for use in filmdata.
 Includes a special enum type and a generic init function for the models.
 """
 
+import datetime
 import sqlalchemy as sa
 from filmdata.lib.dotdict import dotdict
+from filmdata import config
 
 def table_class_init(self, **kwargs):
     """
@@ -70,71 +72,62 @@ class EnumIntType(sa.types.TypeDecorator):
         """
         return None if value == None else self.values[value]
 
-class DynamicTables(object):
+class DynamicModel(object):
 
-    def __init__(self, prefix, schemas, properties=None, common_cols=None):
-        self.prefix = prefix
-        self.schemas = schemas
-        self.properties = properties
-        self.common_cols = common_cols
-        self.tables = {}
-        self.classes = dotdict()
+    def __init__(self, type, name, schema, meta, seed_cols=None):
+        self.type = type
+        self.name = name
+        self.schema = schema
+        self.seed_cols = seed_cols
+        self.meta = meta
+
+        self.table_name = '_'.join((type, name))
+        self.table = None
+        self.model = None
         self.build()
 
-    def build():
-        for name, schema in self.schemas:
-            table_name = '_'.join((prefix, name))
-            cols = [
-                sa.Column('_'.join((table_name, 'id')),
-                          sa.types.Integer, primary_key=True),
-            ]
-            if self.common_cols is not None:
-                cols.extend(self.common_cols())
-            cols.extend(self._get_schema_cols(schema))
-            cols.extend(self._get_timestamp_cols())
+    def build(self):
+        cols = [
+            sa.Column('_'.join((self.table_name, 'id')),
+                      sa.types.Integer, primary_key=True),
+        ]
+        if self.seed_cols is not None:
+            cols.extend(self.seed_cols())
+        cols.extend(self._get_schema_cols())
+        cols.extend(self._get_timestamp_cols())
 
-            params = [table_name, meta.metadata]
-            params.extend(cols)
+        params = [self.table_name, self.meta.metadata] + cols
 
-            self.tables[name] = sa.Table(*params)
+        self.table = sa.Table(*params)
 
-            class_name = ''.join((prefix.capitalize(), name.capitalize()))
-            self.classes[name] = type(class_name, (object,),
-                                      {'__init__' : table_class_init})
+        class_name = ''.join((self.type.capitalize(), self.name.capitalize()))
+        self.model = type(class_name, (object,),
+                          {'__init__' : table_class_init})
 
-            # map the dynamic table to the class
-            orm.mapper(self.classes[name], self.tables[name])
-            
-            if self.properties:
-                self._add_properties(schema.keys(), table_name, name)
+        # map the dynamic table to the class
+        sa.orm.mapper(self.model, self.table)
 
-    def _add_properties(self, col_names, table_name, name):
-        for col in col_names:
-            foreign_name = col_name[:-3]
-            if col_name[-3:] == '_id' and foreign_name in self.properties:
-                relation = orm.relation(self.classes[name],
-                                        uselist=False,
-                                        backref=foreign_name)
-                self.properties[foregin_name][table_name] = relation
+    def get_relation(self, name):
+        if '_'.join((name, 'id')) in self.schema:
+            return sa.orm.relation(self.model, uselist=False, backref=name)
+        return None
 
-    def _get_schema_cols(self, schema):
-        cols = []
-        for col_name, col_type in schema.iteritems():
-            if col_name == 'person' and col_type == 'id':
-                cols.append(sa.Column('person_id', sa.types.Integer,
-                                      sa.ForeignKey('person.person_id')))
-            elif col_name == 'title' and col_type == 'id':
-                cols.append(sa.Column('title_id', sa.types.Integer,
-                                      sa.ForeignKey('title.title_id')))
-            elif col_name == 'role_type' and col_type == None:
-                cols.append(sa.Column('role_type', EnumIntType(ROLE_TYPES),
-                                      nullable=False))
-            elif col_type == 'decimal':
-                cols.append(sa.Column(col_name,
-                                      sa.types.Numeric(asdecimal=True)))
-            elif col_type == 'integer':
-                cols.append(sa.Column(col_name, sa.types.Integer))
-        return cols
+    def _get_col(self, name, type):
+        if type == 'id' and name in ('title_id', 'person_id'):
+            tbl_name = name.partition('_')[0]
+            return sa.Column(name, sa.types.Integer,
+                             sa.ForeignKey('.'.join((tbl_name, name))))
+        elif name == 'role_type' and type == None:
+            return sa.Column(name, EnumIntType(config.ROLE_TYPES),
+                             nullable=False)
+        elif name == 'rating' and type is None:
+            return sa.Column(name, sa.types.Numeric(asdecimal=True, scale=1))
+        elif type == 'decimal':
+            return sa.Column(name, sa.types.Numeric(asdecimal=True))
+        return sa.Column(name, sa.types.Integer)
+
+    def _get_schema_cols(self):
+        return [ self._get_col(n, t) for n, t in self.schema.iteritems() ]
 
     def _get_timestamp_cols(self):
         return [

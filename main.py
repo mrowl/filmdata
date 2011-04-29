@@ -43,12 +43,12 @@ def crunch(option, opt_str, value, parser):
             metric.run(filmdata.sink)
 
 def main():
-    if config.get('core', 'active_sink') == 'sqlalchemy':
+    if config.core.active_sink == 'sqlalchemy':
         from filmdata.sinks.sa.base import SaSink as Sink
         log.info('Sink set to SQLAlchemy, all data will be directed there!')
         filmdata.sink = Sink()
 
-    master_source_name = config.get('core', 'master_source')
+    master_source_name = config.core.master_source
 
     parser = OptionParser()
     parser.add_option("--sink-init", action="store_true",
@@ -92,8 +92,8 @@ def main():
     elif options.sink_install:
         filmdata.sink.install()
 
-    active_role_types = config.get('core', 'active_role_types').split()
-    active_title_types = config.get('core', 'active_title_types').split()
+    active_role_types = config.core.active_role_types.split()
+    active_title_types = config.core.active_title_types.split()
 
     if options.fetches:
         for name in options.fetches.split(','):
