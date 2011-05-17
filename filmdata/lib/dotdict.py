@@ -1,6 +1,7 @@
 """
 For accessing dictionaries with dot notation.
 """
+
 class dotdict(dict):
     """
     This class operates like the standard dictionary except you can use
