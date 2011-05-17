@@ -1,11 +1,11 @@
 from filmdata.lib.memoize import memoize
 
-bayes = lambda R, v, m, C: ((R * v) + (C * m)) / (v + m)
-mult = lambda x, y: x * y
-div = lambda x, y: x / y
-avg = lambda x: sum(x) / len(x)
-
 class Data:
+    bayes = lambda R, v, m, C: ((R * v) + (C * m)) / (v + m)
+    mult = lambda x, y: x * y
+    div = lambda x, y: x / y
+    avg = lambda x: sum(x) / len(x)
+
     def __init__(self, rows):
         self.rows = rows
         self.index = 0
@@ -66,7 +66,7 @@ class Data:
     def add_bayes(self, R_field, v_field, m_val, C_val, label='bayes'):
         new_rows = []
         for r in self.rows:
-            r[label] = bayes(r[R_field], r[v_field], m_val, C_val)
+            r[label] = self.bayes(r[R_field], r[v_field], m_val, C_val)
             new_rows.append(r)
             #print str(r[R_field]) + ' ' + str(r[bayes])
         self.rows = new_rows

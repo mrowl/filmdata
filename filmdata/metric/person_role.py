@@ -3,7 +3,7 @@ from scipy import stats
 
 import filmdata.source
 from filmdata import config
-from filmdata.lib.data import Data, avg, div, mult
+from filmdata.lib.data import Data
 
 log = logging.getLogger(__name__)
 
@@ -73,7 +73,7 @@ def get_title_data(titles):
         for source_name, data_key in data_sources.iteritems():
             if source_name == 'average':
                 yield data_key, [
-                    float(avg(interdict(t,
+                    float(Data.avg(interdict(t,
                                         _data_keys[data_type].values())))
                     for t in titles ]
             else:

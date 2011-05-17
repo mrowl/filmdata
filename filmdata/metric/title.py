@@ -1,7 +1,7 @@
 import logging
 from collections import defaultdict
 
-from filmdata.lib.data import Data, avg, mult
+from filmdata.lib.data import Data
 import filmdata.source
 
 log = logging.getLogger(__name__)
@@ -44,7 +44,7 @@ def run(sink):
         rating_name = _data_keys['rating'][source_name]
         votes_name = _data_keys['votes'][source_name]
         sum_name = '_'.join((rating_name, 'sum'))
-        data.add_field(sum_name, (mult, rating_name, votes_name))
+        data.add_field(sum_name, (Data.mult, rating_name, votes_name))
         report_mean = data.get_mean(sum_name, votes_name)
         data.add_bayes(rating_name, votes_name, _min_votes,
                        report_mean, data_key)
