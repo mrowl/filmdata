@@ -73,8 +73,10 @@ class Fetch:
         client = oauth.Client(consumer)
 
         resp, content = client.request(url, "GET")
-        if content == '<h1>403 Developer Over Rate</h1>':
+        if resp['status'] == '403':
             raise Exception('Over Netflix API rate limit')
+        elif resp['status'] != '200' or content.split() == '':
+            raise Exception('Unknown issue with netflix API: %s' % str(resp))
         return content
 
 class Produce:
