@@ -1,10 +1,10 @@
 from filmdata.lib.memoize import memoize
 
 class Data:
-    bayes = lambda R, v, m, C: ((R * v) + (C * m)) / (v + m)
-    mult = lambda x, y: x * y
-    div = lambda x, y: x / y
-    avg = lambda x: sum(x) / len(x)
+    bayes = staticmethod(lambda R, v, m, C: ((R * v) + (C * m)) / (v + m))
+    mult = staticmethod(lambda x, y: x * y)
+    div = staticmethod(lambda x, y: x / y)
+    avg = staticmethod(lambda x: sum(x) / len(x))
 
     def __init__(self, rows):
         self.rows = rows
