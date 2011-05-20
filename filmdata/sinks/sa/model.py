@@ -12,7 +12,7 @@ import filmdata.metric
 from filmdata import config
 from filmdata.sinks.sa import meta
 from filmdata.lib.dotdict import dotdict
-from filmdata.lib.sa import EnumIntType, DynamicModel
+from filmdata.lib.sa import EnumIntType, DynamicModels
 
 def init_model(engine):
     """Call me before using any of the tables or classes in the model"""
@@ -72,52 +72,23 @@ role_table = sa.Table("role", meta.metadata,
 # definitions for building dynamic tables for the plugin packages (metric,
 # source) value is a tuple with the schemas and the seeder callback for making 
 # columns that are common between all the plugin modules in that package.
-plugin_pkgs = {
-    'metric' : ([(n, s.schema) for n, s in filmdata.metric.manager.iter()],
-                None),
-    'source' : ([(n, s.schema) for n, s in filmdata.source.manager.iter()],
-                None),
-}
 
-# properties for the foreign relations (see bottom of this file)
-properties = {'title' : {}, 'person' : {}}
-
-for pkg_name, structures in plugin_pkgs.items():
-    schemas, common_cols = structures
-
-    tables = {}
-    models = dotdict()
-    for name, schema in schemas:
-        dyna_model = DynamicModel(pkg_name, name, schema, meta, common_cols)
-        tables[name] = dyna_model.table
-        models[name] = dyna_model.model
-
-        for relation_name in properties.keys():
-            relation = dyna_model.get_relation(relation_name)
-            if relation is not None:
-                properties[relation_name][dyna_model.table_name] = relation
-
-    if pkg_name == 'metric': 
-        metric = models
-        metric_tables = tables
-    elif pkg_name == 'source': 
-        source = models
-        source_tables = tables
+metric = DynamicModels(dict([ (n, s.schema) for n, s in
+                              filmdata.metric.manager.iter() ]),
+                       meta, 'metric')
+source = DynamicModels(dict([ (n, s.schema) for n, s in
+                              filmdata.source.manager.iter() ]),
+                       meta, 'source')
 
 culler = source[config.core.master_data]
 
-data_tables = []
-data_cols = []
-data_keys = []
-for source_name, source_class in source.iteritems():
-    data_tables.append(source_class)
-    for data_type in ('rating', 'votes'):
-        if hasattr(source_class, data_type):
-            data_cols.append(getattr(source_class, data_type))
-            data_keys.append((source_name, data_type))
-
-data_dicter = lambda r, o: dict([ ('_'.join(k), r[o + i]) for
-                                  i, k in enumerate(data_keys) ])
+# properties for the foreign relations (see bottom of this file)
+properties = {'title' : {}, 'person' : {}}
+for pkg in (metric, source):
+    pkg_properties = pkg.get_properties(properties.keys())
+    for property_key in properties.keys():
+        for k, v in pkg_properties[property_key].iteritems():
+            properties[property_key][k] = v
 
 
 class Person(object):

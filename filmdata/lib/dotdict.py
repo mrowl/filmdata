@@ -17,5 +17,5 @@ class dotdict(dict):
         """Wraps around the normal dictionary getter"""
         return self.get(attr, None)
 
-    __setattr__ = dict.__setitem__
+    #__setattr__ = dict.__setitem__ don't allow setting with dot notation
     __delattr__ = dict.__delitem__

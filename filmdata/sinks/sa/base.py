@@ -10,6 +10,10 @@ log = logging.getLogger(__name__)
 
 class SaSink:
 
+    _row_dicter = staticmethod(lambda row, keys, offset:
+                               dict(zip(keys, row[offset:])))
+    _data_cols = ('rating', 'votes')
+
     def __init__(self):
         model.init_model(create_engine(config.sqlalchemy.url))
         self.__s = None #sqlalchemy session
@@ -133,17 +137,18 @@ class SaSink:
     def get_titles_rating(self, min_votes=0):
         self.__db_open()
 
+        data_keys, data_cols = zip(*model.source.get_sa_cols(self._data_cols))
         rows = self.__s.query(model.Title.title_id,
-                              *model.data_cols
+                              *data_cols
                              )\
-                       .join(*model.data_tables)\
+                       .join(*model.source.values())\
                        .filter(model.culler.votes >= min_votes)\
                        .all()
 
         titles_rating = []
-        for r in rows:
-            title = { 'title_id' : r[0] }
-            title.update(model.data_dicter(r, 1))
+        for row in rows:
+            title = { 'title_id' : row[0] }
+            title.update(self._row_dicter(row, data_keys, 1))
             titles_rating.append(title)
 
         self.__db_close()
@@ -152,14 +157,15 @@ class SaSink:
     def get_persons_role_titles(self):
         self.__db_open()
 
+        data_keys, data_cols = zip(*model.source.get_sa_cols(self._data_cols))
         rows = self.__s.query(model.Role.person_id,
                               model.Role.type,
                               model.Role.title_id,
                               model.Title.year,
                               model.Role.billing,
-                              *model.data_cols
+                              *data_cols
                              )\
-                       .join(model.Title, *model.data_tables)\
+                       .join(model.Title, *model.source.values())\
                        .filter(model.culler.votes >= 4000)\
                        .all()
 
@@ -173,7 +179,7 @@ class SaSink:
                 'year' : r[3],
                 'billing' : r[4],
             }
-            new_title.update(model.data_dicter(r, 5))
+            new_title.update(self._row_dicter(r, data_keys, 5))
             if person_key in person_roles:
                 person_roles[person_key].append(new_title)
             else:
