@@ -10,3 +10,4 @@ var/
 !config_sample.ini
 *.egg-info
 *.ropeproject
+tags
