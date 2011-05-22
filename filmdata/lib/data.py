@@ -142,7 +142,7 @@ class Data:
             new_rows.append(r)
         self.rows = new_rows
 
-    def add_bayes(self, R_field, v_field, m_val, C_val, label='bayes'):
+    def add_bayes(self, r_field, v_field, m_val, c_val, label='bayes'):
         """
         Add a bayesian estimate to each row. See class attributes for a
         description of this function.
@@ -156,7 +156,7 @@ class Data:
         """
         new_rows = []
         for r in self.rows:
-            r[label] = self.bayes(r[R_field], r[v_field], m_val, C_val)
+            r[label] = self.bayes(r[r_field], r[v_field], m_val, c_val)
             new_rows.append(r)
         self.rows = new_rows
 

@@ -9,3 +9,4 @@ var/
 *.coverage
 !config_sample.ini
 *.egg-info
+*.ropeproject
