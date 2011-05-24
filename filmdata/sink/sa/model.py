@@ -10,7 +10,7 @@ from sqlalchemy.ext.associationproxy import association_proxy
 import filmdata.source
 import filmdata.metric
 from filmdata import config
-from filmdata.sinks.sa import meta
+from filmdata.sink.sa import meta
 from filmdata.lib.dotdict import dotdict
 from filmdata.lib.sa import EnumIntType, DynamicModels
 

@@ -44,7 +44,7 @@ def crunch(option, opt_str, value, parser):
 
 def main():
     if config.core.active_sink == 'sqlalchemy':
-        from filmdata.sinks.sa.base import SaSink as Sink
+        from filmdata.sink.sa.base import SaSink as Sink
         log.info('Sink set to SQLAlchemy, all data will be directed there!')
         filmdata.sink = Sink()
 

@@ -1,6 +1,6 @@
 import unittest
 
-from filmdata.sinks.sa.base import SaSink as Sink
+from filmdata.sink.sa.base import SaSink as Sink
 
 class TestSinkSa(unittest.TestCase):
 

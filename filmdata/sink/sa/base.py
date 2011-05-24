@@ -2,8 +2,8 @@ import logging
 
 from sqlalchemy import or_, create_engine, orm, func
 
-from filmdata.sinks.sa import model
-from filmdata.sinks.sa import meta
+from filmdata.sink.sa import model
+from filmdata.sink.sa import meta
 from filmdata import config
 
 log = logging.getLogger(__name__)
