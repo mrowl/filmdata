@@ -31,7 +31,8 @@ class EnumIntType(sa.types.TypeDecorator):
         #in your table declaration
         animal_table = sa.Table("title", meta,
             sa.Column("name", sa.types.Unicode(31), nullable=False),
-            sa.Column("type", EnumIntType(("dog", "cat", "narwhal")), nullable=False))
+            sa.Column("type", EnumIntType(("dog", "cat", "narwhal")),
+                      nullable=False))
 
         #in a query
         session.query(Animal).filter(Animal.type == "cat").all()
@@ -84,20 +85,20 @@ class DynamicModel(object):
     tbl_name = None
     tbl_obj = None
 
-    """ Use the generic constructor for a table class """
+    # Use the generic constructor for a table class
     __init__ = table_class_init
 
-    """
-    Return the SQLAlchemy relation object for this table, given the name
-    of the related table. Useful for setting up mappings with the orm.
-    Arguments:
-        name - the name of the related table
-    Returns a SQLAlchemy relation from the orm library.
-    """
     @classmethod
-    def get_relation(this, name):
-        if '_'.join((name, 'id')) in this.tbl_obj.columns:
-            return sa.orm.relation(this, uselist=False, backref=name)
+    def get_relation(cls, name):
+        """
+        Return the SQLAlchemy relation object for this table, given the name
+        of the related table. Useful for setting up mappings with the orm.
+        Arguments:
+            name - the name of the related table
+        Returns a SQLAlchemy relation from the orm library.
+        """
+        if '_'.join((name, 'id')) in cls.tbl_obj.columns:
+            return sa.orm.relation(cls, uselist=False, backref=name)
         return None
 
 class DynamicModelFactory:
@@ -105,18 +106,18 @@ class DynamicModelFactory:
     A convenience factory for creating dynamic sqlalchemy models.
     """
 
-    """
-    Create a new model class.
-    Arguments:
-        model_name - a tuple containing the pieces of the name of the table
-        schema - the table schema
-        meta - the meta object from sqlalchemy
-        seed_cols - a function that returns some sqla columns to use in
-            the table (given priority over the schema columns)
-    Returns the new model class mapped to the proper table.
-    """
     @classmethod
-    def build(this, model_name, schema, meta, seed_cols=None):
+    def build(cls, model_name, schema, meta, seed_cols=None):
+        """
+        Create a new model class.
+        Arguments:
+            model_name - a tuple containing the pieces of the name of the table
+            schema - the table schema
+            meta - the meta object from sqlalchemy
+            seed_cols - a function that returns some sqla columns to use in
+                the table (given priority over the schema columns)
+        Returns the new model class mapped to the proper table.
+        """
         tbl_name = '_'.join(model_name)
         cols = [
             sa.Column('_'.join((tbl_name, 'id')),
@@ -124,8 +125,8 @@ class DynamicModelFactory:
         ]
         if seed_cols is not None:
             cols.extend(seed_cols())
-        cols.extend(this._get_schema_cols(schema))
-        cols.extend(this._get_timestamp_cols())
+        cols.extend(cls._get_schema_cols(schema))
+        cols.extend(cls._get_timestamp_cols())
 
         params = [tbl_name, meta.metadata] + cols
 
@@ -143,17 +144,17 @@ class DynamicModelFactory:
         sa.orm.mapper(model_class, tbl_obj)
         return model_class
 
-    """
-    Get a proper sqlalchemy object based on a name and data type.  Translates
-    from the rather simple proprietary fimdata column definition to the sqla
-    column objects.
-    Arguments:
-        name - the name of the column
-        type - the data type of the column
-    Returns a sqlalchemy column object (probably to go into a table def).
-    """
     @classmethod
-    def _get_col(this, name, type):
+    def _get_col(cls, name, type):
+        """
+        Get a proper sqlalchemy object based on a name and data type.
+        Translates from the rather simple proprietary fimdata column
+        definition to the sqla column objects.
+        Arguments:
+            name - the name of the column
+            type - the data type of the column
+        Returns a sqlalchemy column object (probably to go into a table def).
+        """
         if type == 'id' and name in ('title_id', 'person_id'):
             tbl_name = name.partition('_')[0]
             return sa.Column(name, sa.types.Integer,
@@ -167,25 +168,25 @@ class DynamicModelFactory:
             return sa.Column(name, sa.types.Numeric(asdecimal=True))
         return sa.Column(name, sa.types.Integer)
 
-    """
-    Maps the columns defined by the filmdata schema definition dictionary
-    to a a list of columns.
-    Arguments:
-        schema - the dictionary with the schema
-    Returns a list of sqlalchemy columns.
-    """
     @classmethod
-    def _get_schema_cols(this, schema):
-        return [ this._get_col(n, t) for n, t in schema.iteritems() ]
+    def _get_schema_cols(cls, schema):
+        """
+        Maps the columns defined by the filmdata schema definition dictionary
+        to a a list of columns.
+        Arguments:
+            schema - the dictionary with the schema
+        Returns a list of sqlalchemy columns.
+        """
+        return [ cls._get_col(n, t) for n, t in schema.iteritems() ]
     
-    """
-    Helper for creating the two timestamp columns that go at the end of each
-    table. The column names are "created" and "modified" following the
-    convention that pylons uses.
-    Returns a list of length two holding new sqlalchemy column objects.
-    """
     @classmethod
-    def _get_timestamp_cols(this):
+    def _get_timestamp_cols(cls):
+        """
+        Helper for creating the two timestamp columns that go at the end of
+        each table. The column names are "created" and "modified" following the
+        convention that pylons uses.
+        Returns a list of length two holding new sqlalchemy column objects.
+        """
         return [
             sa.Column("created", sa.types.DateTime(), nullable=False,
                       default=datetime.datetime.now),
@@ -199,69 +200,70 @@ class DynamicModels(dotdict, IterableUserDict):
     A class for holding a dictionary of DynamicModel objects.
     """
 
-    """
-    Create a new DynamicModels instance.
-    Arguments:
-        schemas - a list of all the schemas for the underlying tables
-        meta - the meta object for this sqla session
-        name - the name for this instance (will be the prefix to the
-            table names)
-        seed_cols - a lambda function which will generate columns present
-            in each of the underlying tables
-    """
     def __init__(self, schemas, meta, name=None, seed_cols=None):
+        """
+        Create a new DynamicModels instance.
+        Arguments:
+            schemas - a list of all the schemas for the underlying tables
+            meta - the meta object for this sqla session
+            name - the name for this instance (will be the prefix to the
+                table names)
+            seed_cols - a lambda function which will generate columns present
+                in each of the underlying tables
+        """
         IterableUserDict.__init__(self)
         self._build(schemas, meta, name, seed_cols)
 
-    """
-    Get the column keys (i.e. "<tbl_name>_<col_name>") and objects for
-    each of the underlying tables.
-    Helps keep querying dynamic, so you don't have to worry so much about
-    adding/removing tables.
-    e.g.
-        # Assume source holds two classes: SourceImdb and SourceNetflix.
-        # To get SourceImdb.rating, SourceImdb.votes, SourceNetflix.rating,
-        # and SourceNetflix.votes for use in querying you can run this:
-        col_names = ('rating', 'votes')
-        data_keys, data_cols = zip(*source.get_sa_cols(col_names))
-
-        # then query with
-        rows = session.query(*data_cols).all()
-        #
-        # instead of
-        # session.query(SourceImdb.rating, SourceImdb.votes,
-        #               SourceNetflix.rating, SourceNetflix.votes).all()
-        # 
-        # data_keys are nice to have because they hold the
-        # <tbl_name>_<col_name>
-    Arguments:
-        col_names - a sequence of the names of the columns from the underlying
-            tables to get
-    Returns a zipped list of column keys and column objects.
-    """
     def get_sa_cols(self, col_names):
+        """
+        Get the column keys (i.e. "<tbl_name>_<col_name>") and objects for
+        each of the underlying tables.
+        Helps keep querying dynamic, so you don't have to worry so much about
+        adding/removing tables.
+        e.g.
+            # Assume source holds two classes: SourceImdb and SourceNetflix.
+            # To get SourceImdb.rating, SourceImdb.votes, SourceNetflix.rating,
+            # and SourceNetflix.votes for use in querying you can run this:
+            col_names = ('rating', 'votes')
+            data_keys, data_cols = zip(*source.get_sa_cols(col_names))
+
+            # then query with
+            rows = session.query(*data_cols).all()
+            #
+            # instead of
+            # session.query(SourceImdb.rating, SourceImdb.votes,
+            #               SourceNetflix.rating, SourceNetflix.votes).all()
+            # 
+            # data_keys are nice to have because they hold the
+            # <tbl_name>_<col_name>
+        Arguments:
+            col_names - a sequence of the names of the columns from the
+                underlying tables to get
+        Returns a zipped list of column keys and column objects.
+        """
         return [ ('_'.join((model_name, col_name)),
                   getattr(model_class, col_name))
                  for model_name, model_class in self.iteritems()
                  for col_name in col_names
                  if hasattr(model_class, col_name) ]
 
-    """
-    Get all the table objects that the model classes are mapped to.
-    Returns a list of sqla tables.
-    """
     def get_tables(self):
+        """
+        Get all the table objects that the model classes are mapped to.
+        Returns a list of sqla tables.
+        """
         return [ model.tbl_obj for model in self.values() ]
     
-    """
-    Get all the sqlalchemy relation properties for each of the models.
-    Arguments:
-        relation_names - a sequence of the names of the tables to which our
-            models are related
-    Returns a dictionary holding the orm relations.
-        { 'name of relation' : { 'our model's table name' : orm_relation_obj } }
-    """
     def get_properties(self, relation_names):
+        """
+        Get all the sqlalchemy relation properties for each of the models.
+        Arguments:
+            relation_names - a sequence of the names of the tables to which our
+                models are related
+        Returns a dictionary holding the orm relations.
+            { 'name of relation' : { 'our model's table name' :
+                                     orm_relation_obj } }
+        """
         properties = {}
         for relation_name in relation_names:
             properties[relation_name] = {}
@@ -271,11 +273,11 @@ class DynamicModels(dotdict, IterableUserDict):
                     properties[relation_name][model.tbl_name] = relation
         return properties
 
-    """
-    Do the grunt work of building the dictionary of models.
-    Arguments: see __init__
-    """
     def _build(self, schemas, meta, name, seed_cols):
+        """
+        Do the grunt work of building the dictionary of models.
+        Arguments: see __init__
+        """
         name_seq = name.split('_') if name else tuple()
         for model_name, schema_def in schemas.iteritems():
             dyna_model_name = name_seq + model_name.split('_')
