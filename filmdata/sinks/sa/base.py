@@ -69,7 +69,7 @@ class SaSink:
             data_name = data[0]
             data_cols = data[1]
             data_class = model.source[data_name]
-            primary_key = '_'.join(('data', data_name, 'id'))
+            primary_key = '_'.join(('source', data_name, 'id'))
             title_model = self.__get_model(model.Title, title)
             if not title_model.title_id:
                 aka_model = self.__s.query(model.AkaTitle)\
