@@ -1,5 +1,4 @@
-import logging, re, urllib, os, decimal
-import sqlalchemy as sa
+import logging, re, os, decimal
 
 from filmdata import config
 
@@ -128,7 +127,6 @@ class Produce:
     @classmethod
     def _get_roles(this, type, title_types):
         person_name = None
-        person_info = []
 
         type_path = config.imdb['%s_path' % type]
         log.info('Loading roles for "%s" from %s' % (type, type_path))

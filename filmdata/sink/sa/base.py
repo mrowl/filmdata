@@ -1,6 +1,6 @@
 import logging
 
-from sqlalchemy import or_, create_engine, orm, func
+from sqlalchemy import or_, create_engine
 
 from filmdata.sink.sa import model
 from filmdata.sink.sa import meta
