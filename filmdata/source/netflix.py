@@ -1,16 +1,10 @@
-import logging, re, time, HTMLParser, os, decimal
+import logging, re, HTMLParser, os, itertools, string
+from decimal import Decimal
 import oauth2 as oauth
 
 from filmdata import config
 
 log = logging.getLogger(__name__)
-
-_source_max_rating = 5
-_global_max_rating = int(config.core.max_rating)
-_rating_factor = _global_max_rating / _source_max_rating
-
-_titles_file_path = config.netflix.titles_xml_path
-_titles_dir_path = config.netflix.titles_dir_path
 
 schema = {
     'title_id' : 'id',
@@ -18,15 +12,57 @@ schema = {
     'key' : 'integer',
 }
 
-def _get_title_path(id):
-    basename = '.'.join((id, 'xml'))
-    bucket = id[:2]
-    return os.path.join(_titles_dir_path, bucket, basename)
+class NetflixClient(oauth.Client):
 
+    def __init__(self, *args, **kwargs):
+        self._initial_redirections = None
+        oauth.Client.__init__(self, *args, **kwargs)
+        
+    def request(self, *args, **kwargs):
+        if not 'redirections' in kwargs:
+            kwargs['redirections'] = oauth.httplib2.DEFAULT_MAX_REDIRECTS
+        if self._initial_redirections is None:
+            self._initial_redirections = kwargs['redirections']
 
-class Fetch:
+        if kwargs['redirections'] < self._initial_redirections:
+            return oauth.httplib2.Http.request(self, *args, **kwargs)
+        else:
+            return oauth.Client.request(self, *args, **kwargs)
+
+class NetflixMixin:
+    """
+    Mixin which holds some common netflix functions/variables.
+    Attributes:
+        name - the name of this module
+        _rating_factor - the factor to multiply the ratings by (the global
+            maximum rating / the local max rating). Netflix max rating is 5.
+        _titles_file_path - the path to the xml file containing the netflix
+            titles index
+        _titles_dir_path - the path to the directory holding all of the
+            xml files for each individual netflix title
+    """
 
     name = 'netflix'
+    _rating_factor = int(config.core.max_rating) / 5
+
+    _titles_file_path = config.netflix.titles_xml_path
+    _titles_dir_path = config.netflix.titles_dir_path
+
+    @classmethod
+    def _get_title_path(cls, id):
+        """
+        Get the os path to a title based on its id.
+        Arguments:
+            id - the netflix id of the title.
+        Returns a full path.
+        """
+        basename = '.'.join((id, 'xml'))
+        bucket = id[:2]
+        return os.path.join(cls._titles_dir_path, bucket, basename)
+
+
+class Fetch(NetflixMixin):
+
     _consumer_key = config.netflix.consumer_key
     _consumer_secret = config.netflix.consumer_secret
     _titles_url = config.netflix.titles_url
@@ -34,114 +70,90 @@ class Fetch:
     _call_limit = 4900
 
     @classmethod
-    def fetch_data(this):
-        this._download_title_catalog()
-        this._download_titles()
+    def fetch_data(cls):
+        cls._download_title_catalog()
 
     @classmethod
-    def _download_title_catalog(this):
-        if not os.path.isdir(os.path.dirname(_titles_file_path)):
-            os.makedirs(os.path.dirname(_titles_file_path))
-        xml = this._fetch(this._titles_url)
-        f = open(_titles_file_path, 'w')
+    def _download_title_catalog(cls):
+        if not os.path.isdir(os.path.dirname(cls._titles_file_path)):
+            os.makedirs(os.path.dirname(cls._titles_file_path))
+        xml = cls._fetch(cls._titles_url)
+        f = open(cls._titles_file_path, 'w')
         f.write(xml)
         f.close()
 
     @classmethod
-    def _download_titles(this):
-        i = 0
-        for title in Produce._get_titles():
-            title_key = str(title[1][1]['key'])
-            title_path = _get_title_path(title_key)
-            if not os.path.isfile(title_path):
-                dirname = os.path.dirname(title_path)
-                if not os.path.isdir(dirname):
-                    os.makedirs(dirname)
-                title_url = os.path.join(this._title_url_base, title_key)
-                xml = this._fetch(title_url)
-                f = open(title_path, 'w')
-                f.write(xml)
-                f.close()
+    def _fetch(cls, url):
+        consumer = oauth.Consumer(key=cls._consumer_key, secret=cls._consumer_secret)
+        client = NetflixClient(consumer)
 
-                i += 1
-                if i > this._call_limit:
-                    break
-
-    @classmethod
-    def _fetch(this, url):
-        consumer = oauth.Consumer(key=this._consumer_key, secret=this._consumer_secret)
-        client = oauth.Client(consumer)
-
-        resp, content = client.request(url, "GET")
+        print url
+        client.follow_all_redirects = True
+        resp, content = client.request(url, "GET", headers={'accept-encoding' : 'gzip'})
         if resp['status'] == '403':
-            raise Exception('Over Netflix API rate limit')
+            raise Exception('Over Netflix API rate limit?: %s\n%s' %
+                            (str(resp), content))
         elif resp['status'] != '200' or content.split() == '':
-            raise Exception('Unknown issue with netflix API: %s' % str(resp))
+            raise Exception('Unknown issue with netflix API: %s\n%s' %
+                            (str(resp), content))
         return content
 
-class Produce:
+class Produce(NetflixMixin):
 
-    name = 'netflix'
-    _re_item = re.compile('<title_index_item>(.*?)</title_index_item>', re.S)
-    _re_title = re.compile('<title>(.*?)</title>')
-    _re_numeric_id = re.compile('/([0-9]+)$')
-    _re_title_rating = re.compile('<average_rating>([0-9]\.[0-9])</average_rating>')
+    _re_name = re.compile('<title regular="(.*?)" short=".*?"/>')
+    _re_year = re.compile('<release_year>([0-9]+)</release_year>')
+    _re_rating = re.compile('<average_rating>([0-9]\.[0-9])</average_rating>')
     _re_tv_test = re.compile('<category.*? label="Television" term="Television">')
+    _re_film_test = re.compile('<id>http://api.netflix.com/catalog/titles/movies/([0-9]+)</id>')
 
-    _xml_fields = { 'id' : 'id', 'title' : 'name', 'release_year' : 'year' }
+    _fieldsets = { 
+        'key' : { 'name' : _re_name, 'year' : _re_year },
+        'data' : { 'key' : _re_film_test, 'rating' : _re_rating }
+    }
 
     @classmethod
-    def produce_data(this, types):
-        for title in this._get_titles(types):
+    def produce_data(cls, types):
+        for title in cls._get_titles(types):
             yield title
 
     @classmethod
-    def _get_titles(this, types=None):
-        in_item = False
-        skip_title = False
-        h = HTMLParser.HTMLParser()
-        f = open(_titles_file_path, 'r')
-        for line in f:
-            line_clean = line.strip() 
-            if not in_item and line_clean == '<title_index_item>':
-                in_item = True
-                title = { 'type' : 'film' }
+    def _get_titles(cls, types=None):
+        def _extract_catalog_titles(lines):
+            buffer = ''
+            for line in lines:
+                if line ==  '</catalog_title>':
+                    yield buffer + line
+                    buffer = ''
+                elif line ==  '<catalog_title>':
+                    buffer = line
+                else:
+                    buffer += line
+                
+        def _form_title_dict(title_xml):
+            values = { 'key' : { 'type' : 'film' }, 'data' : {} }
+            for field_type, fieldset in cls._fieldsets.items():
+                for field_key, field_re in fieldset.items():
+                    match = field_re.search(title_xml)
+                    if match is not None:
+                        values[field_type][field_key] = match.group(1)
+                    else:
+                        log.info('Title missing field: %s' % field_key)
+                        return None
+            values['data']['key'] = int(values['data']['key'])
+            values['data']['rating'] = (Decimal(values['data']['rating']) *
+                                        cls._rating_factor)
+            return [ values['key'], [ 'netflix', values['data'] ] ]
 
-            if in_item and not skip_title:
-                if this._re_tv_test.match(line):
-                    skip_title = True
-                for field, title_key in this._xml_fields.iteritems():
-                    field_len = len(field) + 2
-                    if line_clean[:field_len] == '<%s>' % field:
-                        slice_stop = line_clean.find('</%s>' % field)
-                        value = line_clean[field_len:slice_stop]
-                        title[title_key] = unicode(h.unescape(value))
+        is_type_film = lambda t: (cls._re_film_test.search(t) and not
+                                  cls._re_tv_test.search(t))
 
-            if line_clean == '</title_index_item>':
-                in_item = False
-                if skip_title:
-                    skip_title = False
-                    continue
-
-                title_key = this._re_numeric_id.search(title['id']).group(1)
-                del title['id']
-
-                data = { 'rating' : this._get_title_rating(title_key),
-                            'key' : int(title_key) }
-                yield [ title, [ 'netflix', data ] ]
-        f.close()
-
-    @classmethod
-    def _get_title_rating(this, id):
-        path = _get_title_path(id)
-        if os.path.isfile(path):
-            f = open(path, 'r')
-            xml = f.read()
-            f.close()
-            rating_match = this._re_title_rating.search(xml)
-            rating = rating_match.group(1) if rating_match else 0
-            return decimal.Decimal(rating) * _rating_factor
-        return 0
+        #h = HTMLParser.HTMLParser()
+        f = open(cls._titles_file_path, 'r')
+        return itertools.ifilter(None,
+            itertools.imap(_form_title_dict,
+                itertools.ifilter(is_type_film,
+                    _extract_catalog_titles(
+                        itertools.imap(string.strip, f)))))
 
 if __name__ == '__main__':
     Fetch.fetch_data()
