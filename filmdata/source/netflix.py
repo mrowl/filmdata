@@ -135,7 +135,7 @@ class Produce(NetflixMixin):
                 for field_key, field_re in fieldset.items():
                     match = field_re.search(title_xml)
                     if match is not None:
-                        values[field_type][field_key] = match.group(1)
+                        values[field_type][field_key] = match.group(1).strip()
                     else:
                         log.info('Title missing field: %s' % field_key)
                         return None
@@ -144,16 +144,18 @@ class Produce(NetflixMixin):
                                         cls._rating_factor)
             return [ values['key'], [ 'netflix', values['data'] ] ]
 
+        h = HTMLParser.HTMLParser()
+        clean_xml = lambda x: unicode(h.unescape(x.decode('utf-8')))
         is_type_film = lambda t: (cls._re_film_test.search(t) and not
                                   cls._re_tv_test.search(t))
 
-        #h = HTMLParser.HTMLParser()
         f = open(cls._titles_file_path, 'r')
         return itertools.ifilter(None,
             itertools.imap(_form_title_dict,
                 itertools.ifilter(is_type_film,
-                    _extract_catalog_titles(
-                        itertools.imap(string.strip, f)))))
+                    itertools.imap(clean_xml,
+                        _extract_catalog_titles(
+                            itertools.imap(string.strip, f))))))
 
 if __name__ == '__main__':
     Fetch.fetch_data()

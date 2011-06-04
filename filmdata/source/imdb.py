@@ -1,4 +1,4 @@
-import logging, re, os, decimal
+import logging, re, os, decimal, md5
 
 from filmdata import config
 
@@ -13,6 +13,7 @@ _rating_factor = _global_max_rating / _source_max_rating
 
 schema = {
     'title_id' : 'id',
+    'key' : 'varchar(32)',
     'rating' : None,
     'votes' : 'integer',
 }
@@ -79,10 +80,15 @@ class Produce:
                     title_key = this._parse_title_info(match.group(3))
                     if title_key and title_key['type'] in types:
                         rating = decimal.Decimal(match.group(2))
+                        title_key_zip = title_key.items()
+                        title_key_zip.sort()
+                        data_md5 = md5.new(str(title_key_zip))
+                        data_key = data_md5.hexdigest()
                         yield [ title_key,
                                 [ 'imdb',
                                   { 'rating' : rating * _rating_factor,
-                                    'votes' : int(match.group(1)) } ] ]
+                                    'votes' : int(match.group(1)),
+                                    'key' : data_key } ] ]
 
     @classmethod
     def produce_roles(this, title_types, role_types):
