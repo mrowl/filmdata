@@ -4,14 +4,13 @@
 import datetime
 
 import sqlalchemy as sa
-from sqlalchemy import orm
+from sqlalchemy import orm, event, DDL
 from sqlalchemy.ext.associationproxy import association_proxy
 
 import filmdata.source
 import filmdata.metric
 from filmdata import config
 from filmdata.sink.sa import meta
-from filmdata.lib.dotdict import dotdict
 from filmdata.lib.sa import EnumIntType, DynamicModels
 
 def init_model(engine):
@@ -38,8 +37,16 @@ title_table = sa.Table("title", meta.metadata,
               default=datetime.datetime.now),
     sa.Column("modified", sa.types.DateTime(), nullable=False,
               default=datetime.datetime.now, onupdate=datetime.datetime.now),
-    sa.UniqueConstraint("name", "year", "type", name="title_info"),
+    sa.UniqueConstraint("name", "year", "type", name="title_info_unq"),
     )
+title_lower_index = DDL(
+    'create index title_name_lower_idx on title ((lower(name)))')
+title_trgm_index = DDL('create index title_name_trgm_idx'
+                       'on title using gin (name gin_trgm_ops)')
+event.listen(title_table, 'after_create',
+             title_lower_index.execute_if(dialect='postgresql'))
+event.listen(title_table, 'after_create',
+             title_trgm_index.execute_if(dialect='postgresql'))
 
 aka_title_table = sa.Table("aka_title", meta.metadata,
     sa.Column("aka_title_id", sa.types.Integer, primary_key=True),
@@ -51,12 +58,21 @@ aka_title_table = sa.Table("aka_title", meta.metadata,
               default=datetime.datetime.now),
     sa.Column("modified", sa.types.DateTime(), nullable=False,
               default=datetime.datetime.now, onupdate=datetime.datetime.now),
-    sa.UniqueConstraint("name", "year", "region", name="aka_title_info"),
+    sa.UniqueConstraint("name", "year", "region", name="aka_title_info_unq"),
     )
+aka_title_lower_index = DDL(
+    'create index aka_title_name_lower_idx on aka_title ((lower(name)))')
+aka_title_trgm_index = DDL('create index aka_title_name_trgm_idx'
+                           'on aka_title using gin (name gin_trgm_ops)')
+event.listen(aka_title_table, 'after_create',
+             aka_title_lower_index.execute_if(dialect='postgresql'))
+event.listen(aka_title_table, 'after_create',
+             aka_title_trgm_index.execute_if(dialect='postgresql'))
 
 role_table = sa.Table("role", meta.metadata,
     sa.Column("role_id", sa.types.Integer, primary_key=True),
-    sa.Column("person_id", sa.types.Integer, sa.ForeignKey("person.person_id")),
+    sa.Column("person_id", sa.types.Integer,
+              sa.ForeignKey("person.person_id")),
     sa.Column("title_id", sa.types.Integer, sa.ForeignKey("title.title_id")),
     sa.Column("type", EnumIntType(config.ROLE_TYPES), nullable=False),
     sa.Column("character", sa.types.Unicode(1023), nullable=True),
@@ -66,41 +82,26 @@ role_table = sa.Table("role", meta.metadata,
     sa.Column("modified", sa.types.DateTime(), nullable=False,
               default=datetime.datetime.now, onupdate=datetime.datetime.now),
     sa.UniqueConstraint("person_id", "title_id", "type", 
-                        name="person_title_link"),
+                        name="person_title_link_unq"),
     )
 
-# definitions for building dynamic tables for the plugin packages (metric,
-# source) value is a tuple with the schemas and the seeder callback for making 
-# columns that are common between all the plugin modules in that package.
-
-metric = DynamicModels(dict([ (n, s.schema) for n, s in
-                              filmdata.metric.manager.iter() ]),
-                       meta, 'metric')
-source = DynamicModels(dict([ (n, s.schema) for n, s in
-                              filmdata.source.manager.iter() ]),
-                       meta, 'source')
-
-culler = source[config.core.master_data]
-
-# properties for the foreign relations (see bottom of this file)
-properties = {'title' : {}, 'person' : {}}
-for pkg in (metric, source):
-    pkg_properties = pkg.get_properties(properties.keys())
-    for property_key in properties.keys():
-        for k, v in pkg_properties[property_key].iteritems():
-            properties[property_key][k] = v
-
-
 class Person(object):
+    """
+    SQLAlchemy Model for a person, e.g. actor.
+    """
+
     titles = association_proxy('roles', 'title')
 
     def __init__(self, name=None):
+        """Create a new person object"""
         self.name = name
 
     def __repr__(self):
+        """String representation of this person"""
         return "<Person('%s')>" % (self.name)
 
     def as_dict(self):
+        """Returns this object as a dict mapping attribute names to values"""
         excludes = ['titles', 'roles', 'created', 'modified']
         d = {}
         for p in orm.util.object_mapper(self).iterate_properties:
@@ -109,20 +110,27 @@ class Person(object):
         return d
 
 class Title(object):
+    """
+    SQLAlchemy Model for a title, e.g. a film.
+    """
+
     people = association_proxy('roles', 'person')
 
     def __init__(self, name=None, year=None, type=None):
+        """Create a new title object"""
         self.name = name
         self.year = year
         self.type = type
 
     def __repr__(self):
+        """String representation of this title"""
         return "<Title('%s','%s', '%s', '%s', '%s')>" % (self.name,
                                                           self.year,
                                                           self.type,
                                                          )
 
     def as_dict(self, include=None):
+        """Returns this object as a dict mapping attribute names to values"""
         excludes = ['titles', 'roles', 'created', 'data_netflix', 'data_imdb',
                     'modified', 'aka_titles']
         if include:
@@ -142,14 +150,19 @@ class Title(object):
         return d
 
 class AkaTitle(object):
+    """
+    SQLAlchemy Model for an alternate name of a title.
+    """
 
     def __init__(self, title_id=None, name=None, year=None, region=None):
+        """Create a new akatitle"""
         self.name = name
         self.year = year
         self.region = region
         self.title_id = title_id
 
     def __repr__(self):
+        """String representation of this akatitle"""
         return "<AkaTitle('%s','%s', '%s', '%s')>" % (self.name,
                                                       self.year,
                                                       self.region,
@@ -157,9 +170,13 @@ class AkaTitle(object):
                                                      )
 
 class Role(object):
+    """
+    SQLAlchemy model of a role (i.e. the title and person who worked on it)
+    """
 
     def __init__(self, type=None, character=None, billing=None,
                  person_id=None, title_id=None):
+        """Create a new role"""
         self.type = type
         self.character = character
         self.billing = billing
@@ -167,8 +184,30 @@ class Role(object):
         self.title_id = title_id
 
     def __repr__(self):
+        """String representation of this role"""
         return "<Role('%s')>" % (self.type, self.character, self.billing,
                                  self.person_id, self.title_id)
+
+# metric holds all the metric plugin models and they can be accessed
+# via metric.<plugin_name> or metric[<plugin_name>]. Likewise for source.
+metric = DynamicModels(dict([ (n, s.schema) for n, s in
+                              filmdata.metric.manager.iter() ]),
+                       meta, 'metric')
+source = DynamicModels(dict([ (n, s.schema) for n, s in
+                              filmdata.source.manager.iter() ]),
+                       meta, 'source')
+
+# Used for culling titles based on number of votes so
+# really rare titles aren't included in the metrics.
+culler = source[config.core.master_data]
+
+# properties for the foreign relations (see below)
+properties = {'title' : {}, 'person' : {}}
+for pkg in (metric, source):
+    pkg_properties = pkg.get_properties(properties.keys())
+    for property_key in properties.keys():
+        for k, v in pkg_properties[property_key].iteritems():
+            properties[property_key][k] = v
 
 
 properties['title']['roles'] = orm.relation(Role, backref='title') 
