@@ -3,7 +3,7 @@ Some SQLAlchemy helpers for use in filmdata.
 Includes a special enum type and a generic init function for the models.
 """
 
-import datetime
+import datetime, re
 import sqlalchemy as sa
 from UserDict import IterableUserDict
 from filmdata.lib.dotdict import dotdict
@@ -155,18 +155,29 @@ class DynamicModelFactory:
             type - the data type of the column
         Returns a sqlalchemy column object (probably to go into a table def).
         """
+        col_args = [ name ]
+        col_kwargs = {}
         if type == 'id' and name in ('title_id', 'person_id'):
             tbl_name = name.partition('_')[0]
-            return sa.Column(name, sa.types.Integer,
-                             sa.ForeignKey('.'.join((tbl_name, name))))
+            col_args += [ sa.types.Integer,
+                          sa.ForeignKey('.'.join((tbl_name, name))) ]
         elif name == 'role_type' and type == None:
-            return sa.Column(name, EnumIntType(config.ROLE_TYPES),
-                             nullable=False)
+            col_args += [ EnumIntType(config.ROLE_TYPES) ]
+            col_kwargs['nullable'] = False
         elif name == 'rating' and type is None:
-            return sa.Column(name, sa.types.Numeric(asdecimal=True, scale=1))
+            col_args += [ sa.types.Numeric(asdecimal=True, scale=1) ]
         elif type == 'decimal':
-            return sa.Column(name, sa.types.Numeric(asdecimal=True))
-        return sa.Column(name, sa.types.Integer)
+            col_args += [ sa.types.Numeric(asdecimal=True) ]
+        elif type[:7] == 'varchar':
+            match = re.match('varchar\(([0-9]+)\)', type)
+            col_len = int(match.group(1)) if match else 31
+            col_args += [ sa.types.Unicode(col_len) ]
+        else: #should be 'integer'
+            col_args += [ sa.types.Integer ]
+        if name == 'key':
+            col_kwargs['nullable'] = False
+            col_kwargs['unique'] = True
+        return sa.Column(*col_args, **col_kwargs)
 
     @classmethod
     def _get_schema_cols(cls, schema):
