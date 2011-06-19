@@ -1,9 +1,11 @@
-import operator, numpy, logging
-from scipy import stats
+import operator, logging
 
 import filmdata.source
 from filmdata import config
 from filmdata.lib.data import Data
+
+stats = None
+numpy = None
 
 log = logging.getLogger(__name__)
 
@@ -89,6 +91,11 @@ def get_title_metrics(data):
     }
 
 def run(sink):
+    scipy = __import__('scipy', None, None, ['stats'])
+    global stats, numpy
+    stats = scipy.stats
+    numpy = __import__('numpy')
+
     data_rows = []
     for k, titles in persons_filter(sink.get_persons_role_titles()):
         titles.sort(key=operator.itemgetter('year'))

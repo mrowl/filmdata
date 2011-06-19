@@ -117,26 +117,26 @@ class SaSink:
 
     def consume_metric(self, producer, name, type=None):
 
-        tbl_model = model.metric[name]
-
-        if type:
-            self._s.query(tbl_model).filter(tbl_model.type == type).delete()
-        else:
-            self._s.execute("truncate metric_%s restart identity" % (name))
+        #self._s.query(tbl_model).filter(tbl_model.type == type).delete()
+        trans = self._s.begin()
+        self._s.execute("truncate table %s restart identity" %
+                        model.metric[name].tbl_name)
+        trans.commit()
 
         for row in producer:
             if type and 'type' not in row:
                 row['type'] = type
-            self._s.add(tbl_model(**row))
+            self._s.add(model.metric[name](**row))
+        self._s.flush()
 
     def get_titles_rating(self, min_votes=0):
         data_keys, data_cols = zip(*model.source.get_sa_cols(self._data_cols))
         rows = self._s.query(model.Title.title_id,
-                              *data_cols
-                             )\
-                       .join(*model.source.values())\
-                       .filter(model.culler.votes >= min_votes)\
-                       .all()
+                             *data_cols
+                            )\
+                      .join(*model.source.values())\
+                      .filter(model.culler.votes >= min_votes)\
+                      .all()
 
         titles_rating = []
         for row in rows:
@@ -206,6 +206,7 @@ class SaSink:
                                                             year + 2)))
         return 'year=%s' % str(year)
 
+    # try %s in (at.year, t.year)
     def _match_title_simple(self, name, year_filter, table='title',
                             lower=False):
         name_selector = 'name'
@@ -225,9 +226,11 @@ class SaSink:
             name_selector = 'at.name'
         name_filter = 'and lower(%s)=:name' if lower else 'and %s=:name'
         stmt.append(name_filter % name_selector)
+        if lower:
+            name = name.lower().replace(': special edition', '', 1)
         return self._s.query('title_id', 'name')\
                       .from_statement(' '.join(stmt))\
-                      .params(name=name.lower() if lower else name).first()
+                      .params(name=name).first()
 
     def _match_title_levenshtein(self, name, year_filter, table='title',
                                  lower=True):

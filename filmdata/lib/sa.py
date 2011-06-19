@@ -172,6 +172,8 @@ class DynamicModelFactory:
             match = re.match('varchar\(([0-9]+)\)', type)
             col_len = int(match.group(1)) if match else 31
             col_args += [ sa.types.Unicode(col_len) ]
+        elif type == 'smallint' or type == 'tinyint':
+            col_args += [ sa.types.SmallInteger ]
         else: #should be 'integer'
             col_args += [ sa.types.Integer ]
         if name == 'key':
