@@ -1,4 +1,5 @@
-import logging, re, HTMLParser, os, itertools, string
+import logging, re, HTMLParser, os, string
+from datetime import datetime
 from decimal import Decimal
 import oauth2 as oauth
 
@@ -15,9 +16,13 @@ schema = {
     'art_small' : 'varchar(100)',
     'art_large' : 'varchar(100)',
     'runtime' : 'integer',
-    'bluray' : 'tinyint',
+    'synopsis_long' : 'varchar(1023)',
+    'synopsis_short' : 'varchar(511)',
+    'dvd_from' : 'datetime',
+    'bluray_from' : 'datetime',
+    'instant_from' : 'datetime',
+    'instant_until' : 'datetime',
     'instant_quality' : 'tinyint',
-    'instant_expires' : 'timestamp',
 }
 
 class NetflixClient(oauth.Client):
@@ -166,10 +171,21 @@ class Produce(NetflixMixin):
                 'key' : netflix_key,
                 'rating' : Decimal(elem.find('average_rating').text) * cls._rating_factor,
                 'runtime' : 0,
-                'bluray' : 0,
+                'synopsis_long' : None,
+                'synopsis_short' : None,
+                'dvd_from' : None,
+                'bluray_from' : None,
+                'instant_from' : None,
+                'instant_until' : None,
                 'instant_quality' : None,
-                'instant_expires' : None,
             }
+
+            synopsis_long = elem.find('./link[@rel="http://schemas.netflix.com/catalog/titles/synopsis"]/synopsis')
+            if synopsis_long != None:
+                netflix_values['synopsis_long'] = synopsis_long.text
+            synopsis_short = elem.find('./link[@rel="http://schemas.netflix.com/catalog/titles/synopsis.short"]/short_synopsis')
+            if synopsis_short != None:
+                netflix_values['synopsis_short'] = synopsis_short.text
 
             box_art = elem.find('./link[@rel="http://schemas.netflix.com/catalog/titles/box_art"]/box_art')
             if box_art != None:
@@ -195,16 +211,28 @@ class Produce(NetflixMixin):
                 if not format:
                     log.warn('No format info found for %s' % title_key['name'])
                     continue
+                available_from = availability.get('available_from')
                 if format.get('label') == 'Blu-ray':
-                    netflix_values['bluray'] = 1
+                    if available_from != None:
+                        netflix_values['bluray_from'] = datetime.fromtimestamp(
+                            int(available_from))
                 elif format.get('label') == 'instant':
+                    available_until = availability.get('available_until')
                     quality = format.find('./category[@scheme="http://api.netflix.com/categories/title_formats/quality"]')
                     if quality != None and quality.get('label') == 'HD':
                         netflix_values['instant_quality'] = 2
                     else:
                         netflix_values['instant_quality'] = 1
-                    netflix_values['instant_expires'] = int(
-                        availability.get('available_until'))
+                    if available_from != None:
+                        netflix_values['instant_from'] = datetime.fromtimestamp(
+                            int(available_from))
+                    if available_until != None:
+                        netflix_values['instant_until'] = datetime.fromtimestamp(
+                            int(available_until))
+                elif format.get('label') == 'DVD':
+                    if available_from != None:
+                        netflix_values['dvd_from'] = datetime.fromtimestamp(
+                            int(available_from))
                 runtime_node = availability.find('runtime')
                 if runtime_node != None:
                     netflix_values['runtime'] = int(runtime_node.text)

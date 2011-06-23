@@ -3,6 +3,7 @@ import logging
 from optparse import OptionParser
 
 import filmdata
+import filmdata.source
 from filmdata import config
 from filmdata.metric import manager as metric_manager
 
@@ -14,7 +15,8 @@ def run_roles_fetch(source, types):
 
 def run_roles_import(source, title_types, role_types):
     log.info('Importing all active roles: %s' % str(role_types))
-    filmdata.sink.consume_roles(source.produce_roles(title_types, role_types))
+    filmdata.sink.consume_roles(source.produce_roles(title_types, role_types),
+                                source.name)
 
 def run_aka_fetch(source):
     log.info('Fetching aka titles from source: %s' % source.name)
@@ -30,7 +32,7 @@ def run_data_fetch(source):
 
 def run_data_import(source, types):
     log.info('Importing data from source: %s' % source.name)
-    filmdata.sink.consume_data(source.produce_data(types))
+    filmdata.sink.consume_titles(source.produce_titles(types), source.name)
 
 def crunch(option, opt_str, value, parser):
     if value and value != 'all':
@@ -46,6 +48,10 @@ def main():
     if config.core.active_sink == 'sqlalchemy':
         from filmdata.sink.sa.base import SaSink as Sink
         log.info('Sink set to SQLAlchemy, all data will be directed there!')
+        filmdata.sink = Sink()
+    elif config.core.active_sink == 'mongo':
+        from filmdata.sink.mongo import MongoSink as Sink
+        log.info('Sink set to MongoDB, all data will be directed there!')
         filmdata.sink = Sink()
 
     master_source_name = config.core.master_source
@@ -84,7 +90,6 @@ def main():
                       help="Run data fetch for source(s) (comma separated)")
     parser.add_option("-i", "--import", action="store", dest="imports",
                       help="Run data import for source(s) (comma separated)")
-
     (options, args) = parser.parse_args()
     
     if options.sink_init:

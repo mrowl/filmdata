@@ -1,103 +1,171 @@
-from pymongo import Connection
-from pymongo.code import Code
-from collections import defaultdict
-from hashlib import md5
-from filmlust.lib.stats import memoize
-import re
+import logging
+import time
+import itertools
+from functools import partial
+from decimal import Decimal
+
+import pymongo as pmongo
+import asyncmongo as amongo
+import tornado.ioloop
+
+from filmdata import config
+
+log = logging.getLogger(__name__)
+
+def take(n, iterable):
+    "Return first n items of the iterable as a list"
+    return list(itertools.islice(iterable, n))
+
+def take_slices(size, iterable):
+    while True:
+        slice = take(size, iterable)
+        if len(slice) > 0:
+            yield slice
+        if len(slice) < size:
+            break
 
 class MongoSink:
 
+    @property
+    def am(self):
+        if self._am is None:
+            self._am = amongo.Client('filmdata', **self._args)
+        return self._am
+
+    @property
+    def m(self):
+        if self._m is None:
+            self._m = pmongo.Connection(self._args['host'], 
+                                         self._args['port'])[self._args['dbname']]
+        return self._m
+
+    @property
+    def io(self):
+        if self._io is None:
+            self._io = tornado.ioloop.IOLoop.instance()
+        return self._io
+
+
     def __init__(self):
-        self.__conn = Connection()
-        self.__db = self.__conn.filmlust
-        self.__t = self.__db.titles
-        self.__p = self.__db.persons
-        self.__safe = False
+        self._args = {
+            'port' : int(config.mongo.port),
+            'maxcached' : int(config.mongo.maxcached),
+            'maxconnections' : int(config.mongo.maxconnections),
+            'host' : config.mongo.host,
+            'dbname' : config.mongo.dbname,
+        }
+        self._m = None
+        self._am = None
+        self._io = None
+        self._io_free = True
+        self._start = time.time()
 
-    def consume_titles(self, producer):
-        docs = []
-        i = 0
-        docs_per_insert = 200
-        for title in producer:
-            i += 1
-            title['_id'] = self.__get_title_id(title)
-            docs.append(title)
-            if i == docs_per_insert:
-                self.__t.insert(docs, True, self.__safe)
-                docs = []
-                i = 0
+    def consume_titles(self, producer, source_name=None):
+        start = time.time()
+        collection = 'title' if source_name is None else 'title_%s' % source_name
+        self.m[collection].ensure_index('key', unique=True)
+        ids = map(self.m[collection].insert,
+                  itertools.imap(self._clean_document,
+                                 take_slices(200, producer)))
+        log.info('Finished importing titles (%ss)' % str(time.time() - start))
 
-    def consume_numbers(self, producer):
+    def consume_numbers(self, producer, source_name=None):
         for number in producer:
             self.__update({ '_id' : self.__get_title_id(number[0]) },
                           { '$set' : { number[1][0] : number[1][1] } })
 
-    def consume_roles(self, producer):
-        for role in producer:
-            self.__update({ '_id' : self.__get_title_id(role[0]) },
-                          { '$push' : { role[1] : role[2] } })
+    def consume_roles(self, producer, source_name=None):
+        start = time.time()
+        collection_person = 'person' if source_name is None else 'person_%s' % source_name
+        collection_title = 'title' if source_name is None else 'title_%s' % source_name
+        self.m[collection_person].ensure_index('key', unique=True)
+        self.m[collection_title].ensure_index('key', unique=True)
 
-    @memoize
-    def get_person_average(self, role='director'):
-        map = Code("function () {"
-                   "    var rating = this.imdb.rating;"
-                   "    var i = this." + role + ".length;"
-                   "    while (i--) {"
-                   "        emit(this." + role + "[i], this.imdb.rating);"
-                   "    }"
-                   "}")
-        reduce = Code("function (key, values) {"
-                      "    var sum = 0;"
-                      "    var i = values.length;"
-                      "    while (i--) {"
-                      "        sum += values[i];"
-                      "    }"
-                      "    return sum;"
-                      "}")
-        #query = { role : { '$in' : ['Nolan, Christopher (I)', re.compile('^Hitchcock, Alfred')] } }
-        query = { role : { '$exists' : 'true' } }
-        mr_result =  self.__t.map_reduce(map, reduce, query=query).find(timeout=False)
-        for doc in mr_result:
-            count = self.__t.find({ role : doc['_id'] }).count()
-            if count > 4:
-                doc['avg'] = doc['value'] / count
-                print doc
+        prev_person_key = None
+        for role in itertools.imap(self._clean_document, producer):
+            title = self.m[collection_title].find_one(
+                { 'key' : role['title']['key'] })
+            if not title is None:
+                if role['person']['key'] != prev_person_key:
+                    self.m[collection_person].insert(role['person'])
+                    prev_person_key = role['person']['key']
 
-    @memoize
-    def get_person_groups(self, role='dirctor'):
-        reduce = Code("function (obj, prev) {"
-                      "    while (i--) {"
-                      "        prev.sum += obj.imdb.rating;"
-                      "        prev.count++;"
-                      "    }"
-                      "}")
-        groups = self.__t.group({ role : 'true' },
-                                { role : { '$exists' : 'true' } },
-                                { 'sum' : 0, 'count' : 0 }, reduce)
-        print groups
+                role['role']['person'] = role['person']['key']
+                self.m[collection_title].update(
+                    { 'key' : role['title']['key'] },
+                    { '$addToSet' : { 'role' : role['role'] } },
+                    upsert=False, multi=False)
+            else:
+                log.debug('Role title ' + role['title']['ident'] + ' not found')
+        log.info('Finished importing titles (%ss)' % str(time.time() - start))
 
-    @memoize
-    def get_average(self):
-        return self.get_sum() / self.get_count()
+    #@memoize
+    #def get_person_average(self, role='director'):
+        #map = Code("function () {"
+                   #"    var rating = this.imdb.rating;"
+                   #"    var i = this." + role + ".length;"
+                   #"    while (i--) {"
+                   #"        emit(this." + role + "[i], this.imdb.rating);"
+                   #"    }"
+                   #"}")
+        #reduce = Code("function (key, values) {"
+                      #"    var sum = 0;"
+                      #"    var i = values.length;"
+                      #"    while (i--) {"
+                      #"        sum += values[i];"
+                      #"    }"
+                      #"    return sum;"
+                      #"}")
+        ##query = { role : { '$in' : ['Nolan, Christopher (I)', re.compile('^Hitchcock, Alfred')] } }
+        #query = { role : { '$exists' : 'true' } }
+        #mr_result =  self.__t.map_reduce(map, reduce, query=query).find(timeout=False)
+        #for doc in mr_result:
+            #count = self.__t.find({ role : doc['_id'] }).count()
+            #if count > 4:
+                #doc['avg'] = doc['value'] / count
+                #print doc
 
-    @memoize
-    def get_sum(self):
-        map = Code("function () {"
-                   "    emit(0, this.imdb.rating);"
-                   "}")
-        reduce = Code("function (key, values) {"
-                      "    var sum = 0;"
-                      "    var i = values.length;"
-                      "    while (i--) {"
-                      "        sum += values[i];"
-                      "    }"
-                      "    return sum;"
-                      "}")
-        return self.__t.map_reduce(map, reduce).find_one(0)['value']
+    #@memoize
+    #def get_person_groups(self, role='dirctor'):
+        #reduce = Code("function (obj, prev) {"
+                      #"    while (i--) {"
+                      #"        prev.sum += obj.imdb.rating;"
+                      #"        prev.count++;"
+                      #"    }"
+                      #"}")
+        #groups = self.__t.group({ role : 'true' },
+                                #{ role : { '$exists' : 'true' } },
+                                #{ 'sum' : 0, 'count' : 0 }, reduce)
+        #print groups
 
-    @memoize
-    def get_count(self):
-        return self.__t.count()
+    #@memoize
+    #def get_sum(self):
+        #map = Code("function () {"
+                   #"    emit(0, this.imdb.rating);"
+                   #"}")
+        #reduce = Code("function (key, values) {"
+                      #"    var sum = 0;"
+                      #"    var i = values.length;"
+                      #"    while (i--) {"
+                      #"        sum += values[i];"
+                      #"    }"
+                      #"    return sum;"
+                      #"}")
+        #return self.__t.map_reduce(map, reduce).find_one(0)['value']
+
+    def _clean_document(self, doc):
+        if isinstance(doc, dict):
+            for k in doc.keys():
+                doc[k] = self._clean_document(doc[k])
+        elif isinstance(doc, tuple):
+            doc = [ v for v in doc ]
+            doc = self._clean_document(doc)
+        elif isinstance(doc, list):
+            for i in range(len(doc)):
+                doc[i] = self._clean_document(doc[i])
+        elif isinstance(doc, Decimal):
+            doc = float(doc)
+        return doc
 
     def __get_title_id(self, title):
         m = md5()
@@ -114,8 +182,5 @@ class MongoSink:
             doc = spec
         self.__t.update(spec, doc, True, False, self.__safe)
 
-    def __group_roles(self, roles):
-        groups = defaultdict(list)
-        for type, person in roles:
-            groups[type].append(person[0])
-        return groups
+if __name__ == "__main__":
+    pass

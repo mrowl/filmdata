@@ -7,10 +7,6 @@ log = logging.getLogger(__name__)
 class UnzipError(Exception): pass
 class DownloadError(Exception): pass
 
-_source_max_rating = 10
-_global_max_rating = int(config.core.max_rating)
-_rating_factor = _global_max_rating / _source_max_rating
-
 schema = {
     'title_id' : 'id',
     'key' : 'varchar(32)',
@@ -61,7 +57,11 @@ class Fetch:
 class Produce:
 
     name = 'imdb'
-    _re_title = re.compile('\s+[0-9.*]{10}\s+([0-9]+)\s+([0-9.]{3,4})\s+(.+)')
+
+    _source_max_rating = 10
+    _global_max_rating = int(config.core.max_rating)
+    _rating_factor = _global_max_rating / _source_max_rating
+    _re_title = re.compile('\s+([0-9.*]{10})\s+([0-9]+)\s+([0-9.]{3,4})\s+(.+)')
     _re_person_start = re.compile('^----\t\t\t------$')
     _re_character_role = re.compile('^(.+?)  (\[.+\])?\s*?(<[0-9]+>)?$')
     _re_person_name = re.compile('^(.*?)\t+(.*)$')
@@ -69,33 +69,107 @@ class Produce:
     _re_aka_title = re.compile('^\s+\(aka (.+?) \(([0-9]{4})\)\)\s+\((.+?)\)')
 
     @classmethod
-    def produce_data(this, types):
+    def produce_titles(cls, types):
         started = 0
         for line in open(config.imdb.rating_path):
             if not started:
                 started = 1 if line.strip() == 'MOVIE RATINGS REPORT' else 0
             else:
-                match = this._re_title.match(line)
+                match = cls._re_title.match(line.decode('latin_1'))
                 if match:
-                    title_key = this._parse_title_info(match.group(3))
-                    if title_key and title_key['type'] in types:
-                        rating = decimal.Decimal(match.group(2))
-                        title_key_zip = title_key.items()
-                        title_key_zip.sort()
-                        data_md5 = md5.new(str(title_key_zip))
-                        data_key = data_md5.hexdigest()
-                        yield [ title_key,
-                                [ 'imdb',
-                                  { 'rating' : rating * _rating_factor,
-                                    'votes' : int(match.group(1)),
-                                    'key' : data_key } ] ]
+                    ident = match.group(4)
+                    title = cls._parse_title_info(ident)
+                    if title and title['type'] in types:
+                        rating = (decimal.Decimal(match.group(3)) *
+                                  cls._rating_factor)
+                        key = cls._ident_to_key(ident.encode('utf_8'))
+                        title.update({
+                            'ident' : ident,
+                            'rating' : rating,
+                            'votes' : int(match.group(2)),
+                            'distribution' : match.group(1),
+                            'key' : key,
+                        })
+                        yield title
 
     @classmethod
-    def produce_roles(this, title_types, role_types):
-        for type in role_types:
-            for role in this._get_roles(type, title_types):
-                log.debug(role)
-                yield role
+    def produce_roles(cls, title_types, role_types):
+        def rname(n):
+            a = n.split(',')
+            return ' '.join(a[1:]).partition('(')[0].strip() + ' ' + a[0]
+        clean_name = lambda x: re.sub('\(.*?\)', '', x)
+
+        for role_type in role_types:
+            person_ident = None
+
+            type_path = config.imdb['%s_path' % role_type]
+            log.info('Loading roles for "%s" from %s' % (role_type, type_path))
+            f = open(type_path, 'r')
+            while not cls._re_person_start.match(f.readline()):
+                pass
+
+            for line in f:
+                title_ident = None
+                if line[:9] == '---------':
+                    log.info('End of File, done importing %s' % role_type)
+                    break
+
+                if not person_ident:
+                    name_match = cls._re_person_name.match(line)
+                    if name_match:
+                        person_ident = name_match.group(1).decode('latin_1')
+                        person_key = cls._ident_to_key(person_ident.encode('utf_8'))
+                        role_string = name_match.group(2)
+                elif not line.strip():
+                    person_ident = None
+                    continue
+                else:
+                    role_string = line.strip()
+
+                role_string = role_string.decode('latin_1')
+                role_match = cls._re_character_role.match(role_string)
+
+                if role_match:
+                    title_ident, character, billing = role_match.groups()
+                    if character:
+                        character = character.strip('[]')
+                    else:
+                        character = None
+                    if billing:
+                        billing = min(int(billing.strip('<>')), 32767)
+                    else:
+                        billing = None
+                else:
+                    log.debug("Errant line for person %s: %s" %
+                              (person_ident, line.decode('latin_1')))
+                    title_ident = role_string
+                    character = billing = None
+
+                if title_ident:
+                    title = cls._parse_title_info(title_ident)
+                else:
+                    title = None
+
+                if person_ident and title and title['type'] in title_types:
+                    title_key = cls._ident_to_key(title_ident.encode('utf_8'))
+                    title.update({
+                        'key' : title_key,
+                        'ident' : title_ident,
+                    })
+                    name = rname(clean_name(person_ident))
+                    yield {
+                        'title' : title,
+                        'person' : {
+                            'key' : person_key,
+                            'ident' : person_ident,
+                            'name' : name,
+                        },
+                        'role' : {
+                            'type' : role_type,
+                            'character' : character,
+                            'billing' : billing
+                        },
+                    }
 
     @classmethod
     def produce_aka_titles(this, types):
@@ -131,54 +205,10 @@ class Produce:
                               'region' : match_aka.group(3).decode('latin_1'), } ]
 
     @classmethod
-    def _get_roles(this, type, title_types):
-        person_name = None
-
-        type_path = config.imdb['%s_path' % type]
-        log.info('Loading roles for "%s" from %s' % (type, type_path))
-        f = open(type_path, 'r')
-        while not this._re_person_start.match(f.readline()):
-            pass
-
-        for line in f:
-            title_string = None
-            if line[:9] == '---------':
-                log.info('End of File, done importing %s' % type)
-                break
-
-            if not person_name:
-                name_match = this._re_person_name.match(line)
-                if name_match:
-                    person_name = name_match.group(1).decode('latin_1')
-                    role_string = name_match.group(2)
-            elif not line.strip():
-                person_name = None
-                continue
-            else:
-                role_string = line.strip()
-
-            role_match = this._re_character_role.match(role_string)
-            if role_match:
-                title_string, character, billing = role_match.groups()
-                if character:
-                    character = character.strip('[]').decode('latin_1')
-                if billing:
-                    billing = billing.strip('<>')
-            else:
-                log.debug("Errant line for person %s: %s" %
-                          (person_name, line.decode('latin_1')))
-                title_string = role_string
-                character = billing = None
-
-            title_key = None
-            if title_string:
-                title_key = this._parse_title_info(title_string)
-
-            if person_name and title_key and title_key['type'] in title_types:
-                role = { 'type' : type,
-                         'character' : character,
-                         'billing' : billing }
-                yield [ title_key, role, { 'name' : person_name } ]
+    def _ident_to_key(cls, ident):
+        """ needs to be encoded to utf-8 """
+        key_md5 = md5.new(ident)
+        return key_md5.hexdigest()[:10]
 
     @classmethod
     def _parse_title_info(this, title_string):
@@ -196,15 +226,15 @@ class Produce:
             else:
                 type = 'film'
             return {
-                'name' : name.decode('latin_1'),
-                'year' : year,
+                'name' : name,
+                'year' : int(year),
                 'type' : type }
         elif match:
             log.info("Title has unknown date, ignoring: %s" %
-                     title_string.decode('latin_1'))
+                     title_string)
         else:
             log.warn("Unable to parse title string %s" %
-                     title_string.decode('latin_1'))
+                     title_string)
         return None
 
 if __name__ == '__main__':
