@@ -66,10 +66,22 @@ class Produce:
     _re_character_role = re.compile('^(.+?)  (\[.+\])?\s*?(<[0-9]+>)?$')
     _re_person_name = re.compile('^(.*?)\t+(.*)$')
     _re_title_info = re.compile('(.+?)\s+\(([0-9]{4}|\?\?\?\?).*?\)\s?\(?(V|TV|VG)?.*$')
-    _re_aka_title = re.compile('^\s+\(aka (.+?) \(([0-9]{4})\)\)\s+\((.+?)\)')
+    _re_aka_title = re.compile('^\s*\(aka (.+?) \(([0-9]{4})\)\)\s+\((.+?)\)\s*\(?([^)]+)?\)?')
 
     @classmethod
     def produce_titles(cls, types):
+        for stat in cls.produce_title_stats(types):
+            stat['master'] = True
+            yield stat
+        for genre in cls.produce_title_genres(types):
+            yield genre
+        for aka in cls.produce_title_akas(types):
+            yield aka
+        for mpaa in cls.produce_title_mpaas(types):
+            yield mpaa
+
+    @classmethod
+    def produce_title_stats(cls, types):
         started = 0
         for line in open(config.imdb.rating_path):
             if not started:
@@ -85,12 +97,115 @@ class Produce:
                         key = cls._ident_to_key(ident.encode('utf_8'))
                         title.update({
                             'ident' : ident,
-                            'rating' : rating,
-                            'votes' : int(match.group(2)),
-                            'distribution' : match.group(1),
                             'key' : key,
+                            'stat'  : {
+                                'rating' : rating,
+                                'votes' : int(match.group(2)),
+                                'distribution' : match.group(1),
+                            },
                         })
                         yield title
+
+    @classmethod
+    def produce_title_mpaas(cls, types):
+        re_mpaa = re.compile('^RE: Rated\s+(.*?)\s+(.*?)$')
+        read_next = False
+        for line in open(config.imdb.mpaa_path):
+            if line[:4] == 'MV: ':
+                ident = line[4:].strip().decode('latin_1')
+                title = cls._parse_title_info(ident)
+                if title and title['type'] in types:
+                    title.update({
+                        'key' : cls._ident_to_key(ident.encode('utf_8')),
+                        'ident' : ident,
+                    })
+                    read_next = True
+            elif line[:4] == 'RE: ' and read_next:
+                line_clean = line.strip().decode('latin_1')
+                match = re_mpaa.match(line_clean)
+                if match and match.group(1):
+                    title['mpaa'] = {
+                        'rating' : match.group(1),
+                        'reason' : match.group(2),
+                    }
+                elif 'mpaa' in title:
+                    title['mpaa']['reason'] += ' ' + line_clean[4:]
+            elif not line.strip() and read_next:
+                read_next = False
+                yield title
+
+    @classmethod
+    def produce_title_genres(cls, types):
+        re_genre = re.compile('^(.*?)\t+(.*?)$')
+        f = open(config.imdb.genre_path, 'r')
+        while not f.readline().strip() == '8: THE GENRES LIST':
+            pass
+        if f.readline().strip() == '==================':
+            pass
+        if f.readline().strip() == '':
+            pass
+        title = None
+        for line in f:
+            line_clean = line.strip().decode('latin_1')
+            match = re_genre.match(line_clean)
+            if match and match.group(1) and match.group(2):
+                ident_new = match.group(1)
+                if title is None or ident_new != title['ident']:
+                    if title is not None and title['type'] in types:
+                        yield title
+                    title = cls._parse_title_info(ident_new)
+                    if title:
+                        title.update({
+                            'key' : cls._ident_to_key(ident_new.encode('utf_8')),
+                            'ident' : ident_new,
+                            'genre' : [],
+                        })
+                if title is not None:
+                    title['genre'].append(match.group(2))
+
+    @classmethod
+    def produce_title_akas(cls, types):
+        aka_path = config.imdb.aka_path
+        log.info('Loading aka-titles from "%s"' % aka_path)
+        f = open(aka_path, 'r')
+        while not f.readline().strip() == 'AKA TITLES LIST':
+            pass
+        if f.readline().strip() == '===============':
+            pass
+
+        title = None
+
+        for line in f:
+            if line[:9] == '---------':
+                log.info('End of File, done importing aka-titles')
+                break
+
+            stripped = line.strip().decode('latin_1')
+            if not stripped:
+                if title:
+                    yield title
+                title = None
+            elif not title:
+                if not stripped[:4] == '(aka':
+                    title = cls._parse_title_info(stripped)
+                    if title and title['type'] not in types:
+                        title = None
+                    elif title:
+                        title.update({
+                            'key' : cls._ident_to_key(stripped.encode('utf_8')),
+                            'ident' : stripped,
+                            'aka' : [],
+                        })
+            else:
+                match_aka = cls._re_aka_title.match(stripped)
+                if match_aka:
+                    note = match_aka.group(4) if match_aka.group(4) else None
+                    title['aka'].append({
+                        'name' : match_aka.group(1),
+                        'year' : match_aka.group(2),
+                        'region' : match_aka.group(3),
+                        'note' : note,
+                    })
 
     @classmethod
     def produce_roles(cls, title_types, role_types):
@@ -170,39 +285,6 @@ class Produce:
                             'billing' : billing
                         },
                     }
-
-    @classmethod
-    def produce_aka_titles(this, types):
-        aka_path = config.imdb.aka_path
-        log.info('Loading aka-titles from "%s"' % aka_path)
-        f = open(aka_path, 'r')
-        while not f.readline().strip() == 'AKA TITLES LIST':
-            pass
-        if f.readline().strip() == '===============':
-            pass
-
-        title_key = None
-
-        for line in f:
-            if line[:9] == '---------':
-                log.info('End of File, done importing aka-titles')
-                break
-
-            stripped = line.strip()
-            if not stripped:
-                title_key = None
-            elif not title_key:
-                if not stripped[:4] == '(aka':
-                    title_key = this._parse_title_info(line)
-                    if title_key and title_key['type'] not in types:
-                        title_key = None
-            else:
-                match_aka = this._re_aka_title.match(line)
-                if match_aka:
-                    yield [ title_key,
-                            { 'name' : match_aka.group(1).decode('latin_1'),
-                              'year' : match_aka.group(2),
-                              'region' : match_aka.group(3).decode('latin_1'), } ]
 
     @classmethod
     def _ident_to_key(cls, ident):

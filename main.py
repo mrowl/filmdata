@@ -24,7 +24,7 @@ def run_aka_fetch(source):
 
 def run_aka_import(source, types):
     log.info('Importing aka titles from source: %s' % source.name)
-    filmdata.sink.consume_aka_titles(source.produce_aka_titles(types))
+    filmdata.sink.consume_title_akas(source.produce_title_akas(types), source.name)
 
 def run_data_fetch(source):
     log.info('Fetching data from source: %s' % source.name)

@@ -60,13 +60,34 @@ class MongoSink:
         self._io_free = True
         self._start = time.time()
 
+    def consume_title_akas(self, producer, source_name=None):
+        start = time.time()
+        collection = 'title' if source_name is None else 'title_%s' % source_name
+        self.m[collection].ensure_index('key', unique=True)
+        for aka in itertools.imap(self._clean_document, producer):
+            self.m[collection].update(
+                { 'key' : aka['title']['key'] },
+                { '$addToSet' : { 'aka' : aka['aka'] } },
+                upsert=False, multi=False)
+
+        log.info('Finished importing akas (%ss)' % str(time.time() - start))
+
     def consume_titles(self, producer, source_name=None):
         start = time.time()
         collection = 'title' if source_name is None else 'title_%s' % source_name
         self.m[collection].ensure_index('key', unique=True)
-        ids = map(self.m[collection].insert,
-                  itertools.imap(self._clean_document,
-                                 take_slices(200, producer)))
+        for title_in in itertools.imap(self._clean_document, producer):
+            title = title_in.copy()
+            key = title['key']
+            if 'master' in title and title['master']:
+                del title['master']
+                #self.m[collection].insert(title)
+            del title['key']
+            self.m[collection].update(
+                { 'key' : key },
+                { '$set' : title },
+                upsert=False, multi=False)
+
         log.info('Finished importing titles (%ss)' % str(time.time() - start))
 
     def consume_numbers(self, producer, source_name=None):
