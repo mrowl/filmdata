@@ -136,8 +136,9 @@ class Produce(NetflixMixin):
     }
 
     @classmethod
-    def produce_data(cls, types):
+    def produce_titles(cls, types):
         for title in cls._get_titles(types):
+            title['master'] = True
             yield title
 
     @classmethod
@@ -145,99 +146,110 @@ class Produce(NetflixMixin):
         h = HTMLParser.HTMLParser()
         clean = lambda x: unicode(h.unescape(x))
 
-        def _extract_catalog_titles(lines):
-            buffer = ''
-            for line in lines:
-                if line ==  '</catalog_title>':
-                    yield buffer + line
-                    buffer = ''
-                elif line ==  '<catalog_title>':
-                    buffer = line
-                else:
-                    buffer += line
+        def _get_availability(elem):
+            format = elem.find('./category[@scheme='
+                               '"http://api.netflix.com/categories/title_formats"]')
+            if not format:
+                log.warn('No format info found')
+                return None
+
+            avail = {
+                'from' : elem.get('available_from'),
+                'until' : elem.get('available_until'),
+            }
+            for k in avail.keys():
+                if avail[k] != None:
+                    avail[k] = datetime.fromtimestamp(int(avail[k]))
+            quality = format.find('./category[@scheme='
+                                  '"http://api.netflix.com/categories/title_formats/quality"]')
+            if quality != None and quality.get('label') == 'HD':
+                avail['quality'] = 2
+            else:
+                avail['quality'] = 1
+            runtime_node = elem.find('runtime')
+            if runtime_node != None:
+                avail['runtime'] = int(runtime_node.text)
+
+            label_to_key_map = {
+                'Blu-ray' : 'bluray',
+                'instant' : 'instant',
+                'DVD' : 'dvd',
+            }
+            label = format.get('label')
+            if not label in label_to_key_map:
+                log.warn('Unknown format %s' % label)
+                return None
+
+            return { label_to_key_map[label] : avail }
+
+        def _get_availabilities(elem):
+            elems = list(elem.find('./link[@rel="http://schemas.'
+                           'netflix.com/catalog/titles/f'
+                           'ormat_availability"]/delivery'
+                           '_formats'))
+            avails = {}
+            for avail in [ a for a in map(_get_availability, elems) if a ]:
+                avails.update(avail)
+            return avails if len(avails) > 0 else None
                 
+        def _get_art(elem):
+            box_art = elem.find('./link[@rel="http://schemas.netflix.com'
+                                '/catalog/titles/box_art"]/box_art')
+            if box_art == None:
+                log.info('No box art found for')
+                return None
+
+            art = {
+                'small' : box_art.find('./link[@rel="http://schemas.netflix.com'
+                                       '/catalog/titles/box_art/150pix_w"]'),
+                'large' : box_art.find('./link[@rel="http://schemas.netflix.com'
+                                       '/catalog/titles/box_art/284pix_w"]'),
+            }
+            for key, node in art.items():
+                if node != None:
+                    art[key] = node.get('href')
+            return art
+
+        def _get_synopsis(elem):
+            synopsis = {}
+            long = elem.find('./link[@rel="http://schemas.netflix.com'
+                             '/catalog/titles/synopsis"]/synopsis')
+            if long != None:
+                synopsis['long'] = clean(long.text)
+
+            short = elem.find('./link[@rel="http://schemas.netflix.com'
+                              '/catalog/titles/synopsis.short"]/short_synopsis')
+            if short != None:
+                synopsis['short'] = clean(short.text)
+            return synopsis if len(synopsis) > 0 else None
+
+        def _get_genres(elem):
+            categories = elem.findall('./category')
+            genres = []
+            for cat in categories:
+                scheme = cat.get('scheme')
+                if 'genres' in scheme:
+                    genres.append(clean(cat.get('label')))
+            return genres if len(genres) > 0 else None
+
         def _form_title_dict(elem, netflix_key):
             release_year = elem.find('release_year')
             if release_year == None or release_year.text == None:
                 log.info('Year not found on %d' % netflix_key)
                 return None
 
-            title_key = {
+            title = {
+                'key' : netflix_key,
                 'name' : clean(elem.find('title').get('regular')), 
                 'year' : int(release_year.text),
-            }
-
-            netflix_values = {
-                'key' : netflix_key,
                 'rating' : Decimal(elem.find('average_rating').text) * cls._rating_factor,
-                'runtime' : 0,
-                'synopsis_long' : None,
-                'synopsis_short' : None,
-                'dvd_from' : None,
-                'bluray_from' : None,
-                'instant_from' : None,
-                'instant_until' : None,
-                'instant_quality' : None,
+                'synopsis' : _get_synopsis(elem),
+                'availability' : _get_availabilities(elem),
+                'art' : _get_art(elem),
+                'genre' : _get_genres(elem),
             }
 
-            synopsis_long = elem.find('./link[@rel="http://schemas.netflix.com/catalog/titles/synopsis"]/synopsis')
-            if synopsis_long != None:
-                netflix_values['synopsis_long'] = synopsis_long.text
-            synopsis_short = elem.find('./link[@rel="http://schemas.netflix.com/catalog/titles/synopsis.short"]/short_synopsis')
-            if synopsis_short != None:
-                netflix_values['synopsis_short'] = synopsis_short.text
-
-            box_art = elem.find('./link[@rel="http://schemas.netflix.com/catalog/titles/box_art"]/box_art')
-            if box_art != None:
-                art_nodes = {
-                    'small' : box_art.find('./link[@rel="http://schemas.netflix.com/catalog/titles/box_art/150pix_w"]'),
-                    'large' : box_art.find('./link[@rel="http://schemas.netflix.com/catalog/titles/box_art/284pix_w"]'),
-                }
-                for name, node in art_nodes.items():
-                    key = '_'.join(('art', name))
-                    if node != None:
-                        netflix_values[key] = node.get('href')
-                    else:
-                        netflix_values[key] = None
-            else:
-                log.info('No box art found for %s' % title_key['name'])
-
-            availabilities = list(elem.find('./link[@rel="http://schemas.'
-                                            'netflix.com/catalog/titles/f'
-                                            'ormat_availability"]/delivery'
-                                            '_formats'))
-            for availability in availabilities:
-                format = availability.find('./category[@scheme="http://api.netflix.com/categories/title_formats"]')
-                if not format:
-                    log.warn('No format info found for %s' % title_key['name'])
-                    continue
-                available_from = availability.get('available_from')
-                if format.get('label') == 'Blu-ray':
-                    if available_from != None:
-                        netflix_values['bluray_from'] = datetime.fromtimestamp(
-                            int(available_from))
-                elif format.get('label') == 'instant':
-                    available_until = availability.get('available_until')
-                    quality = format.find('./category[@scheme="http://api.netflix.com/categories/title_formats/quality"]')
-                    if quality != None and quality.get('label') == 'HD':
-                        netflix_values['instant_quality'] = 2
-                    else:
-                        netflix_values['instant_quality'] = 1
-                    if available_from != None:
-                        netflix_values['instant_from'] = datetime.fromtimestamp(
-                            int(available_from))
-                    if available_until != None:
-                        netflix_values['instant_until'] = datetime.fromtimestamp(
-                            int(available_until))
-                elif format.get('label') == 'DVD':
-                    if available_from != None:
-                        netflix_values['dvd_from'] = datetime.fromtimestamp(
-                            int(available_from))
-                runtime_node = availability.find('runtime')
-                if runtime_node != None:
-                    netflix_values['runtime'] = int(runtime_node.text)
-
-            return [ title_key, [ 'netflix', netflix_values ] ]
+            return title
 
         context = etree.iterparse(cls._titles_file_path,
                                   events=('start', 'end'))
