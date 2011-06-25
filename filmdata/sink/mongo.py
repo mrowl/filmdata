@@ -72,24 +72,28 @@ class MongoSink:
 
         log.info('Finished importing akas (%ss)' % str(time.time() - start))
 
-    def consume_titles(self, producer, source_name=None):
+    def match_source_titles(self, source_one, source_two):
+        pass
+
+    def get_titles_for_matching(source):
+        collection = '%s_title' % source
+        self.m[collection].find()
+
+    def consume_source_titles(self, producer, source_name):
         start = time.time()
-        collection = 'title' if source_name is None else 'title_%s' % source_name
-        self.m[collection].ensure_index('key', unique=True)
+        collection = '%s_title' % source_name
         for title_in in itertools.imap(self._clean_document, producer):
-            title = title_in.copy()
-            key = title['key']
+            title = dict([ (k, v) for k,v in title_in.items() if
+                           k not in ('key', 'noinsert') ])
             has_title = self.m[collection].find_one(
-                { 'key' : title['key'] })
+                { '_id' : title_in['key'] })
             if (not has_title and not 
-                ('noinsert' in title and title['noinsert'])):
+                ('noinsert' in title_in and title_in['noinsert'])):
+                title['_id'] = title_in['key']
                 self.m[collection].insert(title)
             else:
-                if 'noinsert' in title:
-                    del title['noinsert']
-                del title['key']
                 self.m[collection].update(
-                    { 'key' : key },
+                    { '_id' : title_in['key'] },
                     { '$set' : title },
                     upsert=False, multi=False)
 
