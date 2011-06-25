@@ -70,15 +70,18 @@ class Produce:
 
     @classmethod
     def produce_titles(cls, types):
-        for stat in cls.produce_title_stats(types):
-            stat['master'] = True
-            yield stat
+        titles = dict([ (s['key'], s) for
+                        s in cls.produce_title_stats(types) ])
         for genre in cls.produce_title_genres(types):
-            yield genre
+            if genre['key'] in titles:
+                titles[genre['key']]['genre'] = genre['genre']
         for aka in cls.produce_title_akas(types):
-            yield aka
+            if aka['key'] in titles:
+                titles[aka['key']]['aka'] = aka['aka']
         for mpaa in cls.produce_title_mpaas(types):
-            yield mpaa
+            if mpaa['key'] in titles:
+                titles[mpaa['key']]['mpaa'] = mpaa['mpaa']
+        return titles.itervalues()
 
     @classmethod
     def produce_title_stats(cls, types):
@@ -132,7 +135,8 @@ class Produce:
                     title['mpaa']['reason'] += ' ' + line_clean[4:]
             elif not line.strip() and read_next:
                 read_next = False
-                yield title
+                if 'mpaa' in title:
+                    yield title
 
     @classmethod
     def produce_title_genres(cls, types):
@@ -312,7 +316,7 @@ class Produce:
                 'year' : int(year),
                 'type' : type }
         elif match:
-            log.info("Title has unknown date, ignoring: %s" %
+            log.debug("Title has unknown date, ignoring: %s" %
                      title_string)
         else:
             log.warn("Unable to parse title string %s" %
