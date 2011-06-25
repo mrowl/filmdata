@@ -23,12 +23,72 @@ class Fetch:
     _rating_factor = int(config.core.max_rating) / 5
     _api_key = config.flixster.key
     _max_threads = 8
-    _threads_finished = 0
     _max_requests = 4000
     
     @classmethod
     def fetch_data(cls, pull_ids=False):
-        cls.fetch_ids()
+        if pull_ids:
+            cls.fetch_ids()
+        cls.fetch_info()
+
+    @classmethod
+    def fetch_info(cls):
+        def finish(results, last):
+            reactor.stop()
+            print 'ended at %s' % str(last)
+
+        def fetch_set(urls, last=None):
+
+            def handler(body):
+                print 'in handler'
+                title = json.loads(body.strip())
+                if 'id' in title:
+                    title_jsoned = json.dumps(title)
+                    f = open(config.flixster.titles_path, 'a')
+                    f.write(title_jsoned + '\n')
+                    f.close()
+                return True
+
+            deferreds = []
+            for url in urls:
+                deferreds.append(getPage(url).addCallback(handler))
+            dl = defer.DeferredList(deferreds)
+            if last is not None:
+                dl.addCallback(finish, last)
+            return dl
+
+        fetched_titles = []
+        fetched_title_ids = []
+        if os.path.exists(config.flixster.titles_path):
+            fetched_titles = map(json.loads, [ l.strip() for l in
+                                              open(config.flixster.titles_path) ])
+            fetched_title_ids = [ int(title['id']) for title in fetched_titles ]
+
+        available_ids = json.load(open(config.flixster.ids_path))
+        unfetched_title_ids = list(set(available_ids) - set(fetched_title_ids))
+        unfetched_title_ids.sort()
+
+        if len(unfetched_title_ids) > cls._max_requests:
+            ids_to_fetch = unfetched_title_ids[:cls._max_requests]
+        elif len(unfetched_title_ids) == 0:
+            return
+        else:
+            ids_to_fetch = unfetched_title_ids
+
+        args = urllib.urlencode({ 'apikey' : cls._api_key, })
+        url_maker = lambda id: '?'.join((config.flixster.title_info_url + str(id) + '.json',
+                                         args))
+        i = 0
+        print 'starting at %s' % str(ids_to_fetch[0])
+        id_iter = iter(ids_to_fetch)
+        while i < cls._max_requests:
+            delay = 1.3*i/cls._max_threads
+            i += cls._max_threads
+            id_set = take(cls._max_threads, id_iter)
+            url_set = map(url_maker, id_set)
+            last = id_set[-1] if i >= cls._max_requests else None
+            reactor.callLater(delay, fetch_set, url_set, last=last)
+        reactor.run()
 
     @classmethod
     def fetch_ids(cls):
@@ -48,12 +108,13 @@ class Fetch:
             prev_set = json.load(open(config.flixster.ids_path))
             ids.extend(prev_set)
             uniques = list(set(ids))
+            uniques.sort()
             #flatter = [ id for sub_k, sub_v in id_lists for k, id in sub_v ]
             
             json.dump(uniques, open(config.flixster.ids_path, 'w'))
             print 'Dumped %d ids' % len(uniques)
-            json.dump(last, open(config.flixster.last_query_path, 'w'))
-            print 'ended at %s' % str(title_set[-1]['key'])
+            json.dump(last, open(config.flixster.last_id_query_path, 'w'))
+            print 'ended at %s' % str(last)
 
         def fetch_set(urls, last=None):
 
@@ -74,8 +135,8 @@ class Fetch:
 
 
         titles = filmdata.sink.get_titles('netflix')
-        if os.path.exists(config.flixster.last_query_path):
-            last_query = json.load(open(config.flixster.last_query_path))
+        if os.path.exists(config.flixster.last_id_query_path):
+            last_query = json.load(open(config.flixster.last_id_query_path))
             print 'starting at %s' % str(last_query)
             title_iter = itertools.dropwhile(lambda t: t['key'] != last_query, titles)
         else:
