@@ -308,11 +308,13 @@ class Produce:
                     title['key'] = title_key
                     title['ident'] = title_ident
                     if not title_key in titles:
-                        title['production'] = {}
-                        for r in cls._role_types:
-                            if r not in ('actor', 'actress'):
-                                title['production'][r] = []
-                        title['cast'] = []
+                        if group is None or group == 'production':
+                            title['production'] = {}
+                            for r in cls._role_types:
+                                if r not in cast_set:
+                                    title['production'][r] = []
+                        if group is None or group == 'cast':
+                            title['cast'] = []
                         titles[title_key] = title 
                     if role_type in ('actor', 'actress'):
                         titles[title_key]['cast'].append({
