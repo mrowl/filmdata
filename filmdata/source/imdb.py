@@ -1,4 +1,5 @@
 import logging, re, os, decimal, md5, random
+from functools import partial
 
 from filmdata import config
 
@@ -67,20 +68,26 @@ class Produce:
     _re_title_info = re.compile('(.+?)\s+\(([0-9]{4}|\?\?\?\?).*?\)\s?\(?(V|TV|VG)?.*$')
     _re_aka_title = re.compile('^\s*\(aka (.+?) \(([0-9]{4})\)\)\s+\((.+?)\)\s*\(?([^)]+)?\)?')
 
+    _master_producer = 'stat'
+
     @classmethod
     def produce_titles(cls, types):
+        producers = {
+            'stat' : cls.produce_title_stats,
+            'cast' : partial(cls.produce_roles, group='cast'),
+            'production' : partial(cls.produce_roles, group='production'),
+            'genre' : cls.produce_title_genres,
+            'aka' : cls.produce_title_akas,
+            'mpaa' : cls.produce_title_mpaas,
+        }
+
         titles = dict([ (s['key'], s) for
-                        s in cls.produce_title_stats(types) ])
+                        s in producers[cls._master_producer](types) ])
         valid_keys = frozenset(titles.keys())
-        for genre in cls.produce_title_genres(types, keys=valid_keys):
-            titles[genre['key']]['genre'] = genre['genre']
-        for aka in cls.produce_title_akas(types, keys=valid_keys):
-            titles[aka['key']]['aka'] = aka['aka']
-        for mpaa in cls.produce_title_mpaas(types, keys=valid_keys):
-            titles[mpaa['key']]['mpaa'] = mpaa['mpaa']
-        for role in cls.produce_roles(types, keys=valid_keys):
-            titles[role['key']]['cast'] = role['cast']
-            titles[role['key']]['production'] = role['production']
+        for name, func in producers.items():
+            if name != cls._master_producer:
+                for title in func(types, keys=valid_keys):
+                    titles[title['key']][name] = title[name]
         return titles.itervalues()
 
     @classmethod
@@ -215,7 +222,7 @@ class Produce:
                     })
 
     @classmethod
-    def produce_roles(cls, title_types, keys=None):
+    def produce_roles(cls, title_types, keys=None, group=None):
         re_person_start = re.compile('^----\t\t\t------$')
         re_character_role = re.compile('^(.+?)  (\[.+\])?\s*?(<[0-9]+>)?$')
         re_person_name = re.compile('^(.*?)\t+(.*)$')
@@ -225,7 +232,14 @@ class Produce:
             return ' '.join(a[1:]).partition('(')[0].strip() + ' ' + a[0]
         clean_name = lambda x: re.sub('\(.*?\)', '', x)
         titles = {}
-        for role_type in cls._role_types:
+        cast_set = set(('actor', 'actress'))
+        if group == 'production':
+            role_types = set(cls._role_types) - cast_set
+        elif group == 'cast':
+            role_types = set(cls._role_types) & cast_set
+        else:
+            role_types = cls._role_types
+        for role_type in role_types:
             person_ident = None
 
             type_path = config.imdb['%s_path' % role_type]
@@ -323,7 +337,7 @@ class Produce:
                             'key' : person_key,
                             'ident' : person_ident,
                         })
-        return titles.values()
+        return titles.itervalues()
 
     @classmethod
     def _ident_to_key(cls, ident):
