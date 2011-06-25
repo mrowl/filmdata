@@ -321,6 +321,31 @@ class Produce(NetflixMixin):
                     genres.append(clean(cat.get('label')))
             return genres
 
+        def _get_people(elem):
+            found = elem.findall('./people/link[@rel="http://schemas.netflix.com'
+                                 '/catalog/person"]')
+            people = []
+            for i, person in enumerate(found):
+                href = person.get('href')
+                if not href:
+                    continue
+                id = int(href.rpartition('/')[2])
+                name = person.get('title')
+                if not name:
+                    continue
+                people.append({ 'key' : id, 'name' : name, 'billing' : i + 1 })
+            return people
+
+        def _get_cast(elem):
+            schema = elem.find('./link[@rel="http://schemas.netflix.com'
+                               '/catalog/people.cast"]')
+            return _get_people(schema) if schema is not None else {}
+
+        def _get_directors(elem):
+            schema = elem.find('./link[@rel="http://schemas.netflix.com'
+                               '/catalog/people.directors"]')
+            return _get_people(schema) if schema is not None else {}
+
         def _form_title_dict(elem, key, votes=None):
             release_year = elem.find('release_year')
             if release_year == None or release_year.text == None:
@@ -344,6 +369,8 @@ class Produce(NetflixMixin):
                 'availability' : _get_availabilities(elem),
                 'art' : _get_art(elem),
                 'genre' : _get_genres(elem),
+                'production' : { 'director' : _get_directors(elem) },
+                'cast' : _get_cast(elem),
             }
 
             return title
