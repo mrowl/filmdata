@@ -1,4 +1,4 @@
-import logging, re, os, decimal, md5
+import logging, re, os, decimal, md5, random
 
 from filmdata import config
 
@@ -58,13 +58,12 @@ class Produce:
 
     name = 'imdb'
 
+    _role_types = config.imdb.active_role_types.split()
+
     _source_max_rating = 10
     _global_max_rating = int(config.core.max_rating)
     _rating_factor = _global_max_rating / _source_max_rating
     _re_title = re.compile('\s+([0-9.*]{10})\s+([0-9]+)\s+([0-9.]{3,4})\s+(.+)')
-    _re_person_start = re.compile('^----\t\t\t------$')
-    _re_character_role = re.compile('^(.+?)  (\[.+\])?\s*?(<[0-9]+>)?$')
-    _re_person_name = re.compile('^(.*?)\t+(.*)$')
     _re_title_info = re.compile('(.+?)\s+\(([0-9]{4}|\?\?\?\?).*?\)\s?\(?(V|TV|VG)?.*$')
     _re_aka_title = re.compile('^\s*\(aka (.+?) \(([0-9]{4})\)\)\s+\((.+?)\)\s*\(?([^)]+)?\)?')
 
@@ -72,19 +71,20 @@ class Produce:
     def produce_titles(cls, types):
         titles = dict([ (s['key'], s) for
                         s in cls.produce_title_stats(types) ])
-        for genre in cls.produce_title_genres(types):
-            if genre['key'] in titles:
-                titles[genre['key']]['genre'] = genre['genre']
-        for aka in cls.produce_title_akas(types):
-            if aka['key'] in titles:
-                titles[aka['key']]['aka'] = aka['aka']
-        for mpaa in cls.produce_title_mpaas(types):
-            if mpaa['key'] in titles:
-                titles[mpaa['key']]['mpaa'] = mpaa['mpaa']
+        valid_keys = frozenset(titles.keys())
+        for genre in cls.produce_title_genres(types, keys=valid_keys):
+            titles[genre['key']]['genre'] = genre['genre']
+        for aka in cls.produce_title_akas(types, keys=valid_keys):
+            titles[aka['key']]['aka'] = aka['aka']
+        for mpaa in cls.produce_title_mpaas(types, keys=valid_keys):
+            titles[mpaa['key']]['mpaa'] = mpaa['mpaa']
+        for role in cls.produce_roles(types, keys=valid_keys):
+            titles[role['key']]['cast'] = role['cast']
+            titles[role['key']]['production'] = role['production']
         return titles.itervalues()
 
     @classmethod
-    def produce_title_stats(cls, types):
+    def produce_title_stats(cls, types, keys=None):
         started = 0
         for line in open(config.imdb.rating_path):
             if not started:
@@ -107,10 +107,11 @@ class Produce:
                                 'distribution' : match.group(1),
                             },
                         })
-                        yield title
+                        if keys is None or key in keys:
+                            yield title
 
     @classmethod
-    def produce_title_mpaas(cls, types):
+    def produce_title_mpaas(cls, types, keys=None):
         re_mpaa = re.compile('^RE: Rated\s+(.*?)\s+(.*?)$')
         read_next = False
         for line in open(config.imdb.mpaa_path):
@@ -135,11 +136,11 @@ class Produce:
                     title['mpaa']['reason'] += ' ' + line_clean[4:]
             elif not line.strip() and read_next:
                 read_next = False
-                if 'mpaa' in title:
+                if 'mpaa' in title and (keys is None or title['key'] in keys):
                     yield title
 
     @classmethod
-    def produce_title_genres(cls, types):
+    def produce_title_genres(cls, types, keys=None):
         re_genre = re.compile('^(.*?)\t+(.*?)$')
         f = open(config.imdb.genre_path, 'r')
         while not f.readline().strip() == '8: THE GENRES LIST':
@@ -155,7 +156,9 @@ class Produce:
             if match and match.group(1) and match.group(2):
                 ident_new = match.group(1)
                 if title is None or ident_new != title['ident']:
-                    if title is not None and title['type'] in types:
+                    if (title is not None and
+                        title['type'] in types and
+                        (keys is None or title['key'] in keys)):
                         yield title
                     title = cls._parse_title_info(ident_new)
                     if title:
@@ -168,7 +171,7 @@ class Produce:
                     title['genre'].append(match.group(2))
 
     @classmethod
-    def produce_title_akas(cls, types):
+    def produce_title_akas(cls, types, keys=None):
         aka_path = config.imdb.aka_path
         log.info('Loading aka-titles from "%s"' % aka_path)
         f = open(aka_path, 'r')
@@ -186,7 +189,7 @@ class Produce:
 
             stripped = line.strip().decode('latin_1')
             if not stripped:
-                if title:
+                if title and (keys is None or title['key'] in keys):
                     yield title
                 title = None
             elif not title:
@@ -212,19 +215,23 @@ class Produce:
                     })
 
     @classmethod
-    def produce_roles(cls, title_types, role_types):
+    def produce_roles(cls, title_types, keys=None):
+        re_person_start = re.compile('^----\t\t\t------$')
+        re_character_role = re.compile('^(.+?)  (\[.+\])?\s*?(<[0-9]+>)?$')
+        re_person_name = re.compile('^(.*?)\t+(.*)$')
+        re_writer_role = re.compile('^(.+?)  \((screenplay|written|original screenplay|original story|story).*?\)\s*?(<[0-9,]+>)?$')
         def rname(n):
             a = n.split(',')
             return ' '.join(a[1:]).partition('(')[0].strip() + ' ' + a[0]
         clean_name = lambda x: re.sub('\(.*?\)', '', x)
-
-        for role_type in role_types:
+        titles = {}
+        for role_type in cls._role_types:
             person_ident = None
 
             type_path = config.imdb['%s_path' % role_type]
             log.info('Loading roles for "%s" from %s' % (role_type, type_path))
             f = open(type_path, 'r')
-            while not cls._re_person_start.match(f.readline()):
+            while not re_person_start.match(f.readline()):
                 pass
 
             for line in f:
@@ -234,7 +241,7 @@ class Produce:
                     break
 
                 if not person_ident:
-                    name_match = cls._re_person_name.match(line)
+                    name_match = re_person_name.match(line)
                     if name_match:
                         person_ident = name_match.group(1).decode('latin_1')
                         person_key = cls._ident_to_key(person_ident.encode('utf_8'))
@@ -246,7 +253,10 @@ class Produce:
                     role_string = line.strip()
 
                 role_string = role_string.decode('latin_1')
-                role_match = cls._re_character_role.match(role_string)
+                if role_type == 'writer':
+                    role_match = re_writer_role.match(role_string)
+                else:
+                    role_match = re_character_role.match(role_string)
 
                 if role_match:
                     title_ident, character, billing = role_match.groups()
@@ -255,7 +265,10 @@ class Produce:
                     else:
                         character = None
                     if billing:
-                        billing = min(int(billing.strip('<>')), 32767)
+                        if role_type == 'writer':
+                            billing = int(billing.strip('<>').partition(',')[0])
+                        else:
+                            billing = min(int(billing.strip('<>')), 32767)
                     else:
                         billing = None
                 else:
@@ -266,29 +279,51 @@ class Produce:
 
                 if title_ident:
                     title = cls._parse_title_info(title_ident)
+                    title_key = cls._ident_to_key(title_ident.encode('utf_8'))
                 else:
                     title = None
 
-                if person_ident and title and title['type'] in title_types:
-                    title_key = cls._ident_to_key(title_ident.encode('utf_8'))
-                    title.update({
-                        'key' : title_key,
-                        'ident' : title_ident,
-                    })
+                if (person_ident and title and
+                    title['type'] in title_types and
+                    (keys is None or title_key in keys)):
+
                     name = rname(clean_name(person_ident))
-                    yield {
-                        'title' : title,
-                        'person' : {
+                    if random.randint(0, 20000) == 0:
+                        log.info('imdb %s status: %s' % (role_type, person_ident))
+
+                    title['key'] = title_key
+                    title['ident'] = title_ident
+                    if not title_key in titles:
+                        title['production'] = {}
+                        for r in cls._role_types:
+                            if r not in ('actor', 'actress'):
+                                title['production'][r] = []
+                        title['cast'] = []
+                        titles[title_key] = title 
+                    if role_type in ('actor', 'actress'):
+                        titles[title_key]['cast'].append({
+                            'name' : name,
                             'key' : person_key,
                             'ident' : person_ident,
-                            'name' : name,
-                        },
-                        'role' : {
-                            'type' : role_type,
+                            'billing' : billing,
                             'character' : character,
-                            'billing' : billing
-                        },
-                    }
+                            'role' : role_type,
+                        })
+                    elif role_type == 'writer':
+                        titles[title_key]['production'][role_type].append({
+                            'name' : name,
+                            'key' : person_key,
+                            'ident' : person_ident,
+                            'billing' : billing,
+                            'role' : character,
+                        })
+                    else:
+                        titles[title_key]['production'][role_type].append({
+                            'name' : name,
+                            'key' : person_key,
+                            'ident' : person_ident,
+                        })
+        return titles.values()
 
     @classmethod
     def _ident_to_key(cls, ident):
