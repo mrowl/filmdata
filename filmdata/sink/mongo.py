@@ -79,14 +79,19 @@ class MongoSink:
         for title_in in itertools.imap(self._clean_document, producer):
             title = title_in.copy()
             key = title['key']
-            if 'master' in title and title['master']:
-                del title['master']
-                #self.m[collection].insert(title)
-            del title['key']
-            self.m[collection].update(
-                { 'key' : key },
-                { '$set' : title },
-                upsert=False, multi=False)
+            has_title = self.m[collection].find_one(
+                { 'key' : title['key'] })
+            if (not has_title and not 
+                ('noinsert' in title and title['noinsert'])):
+                self.m[collection].insert(title)
+            else:
+                if 'noinsert' in title:
+                    del title['noinsert']
+                del title['key']
+                self.m[collection].update(
+                    { 'key' : key },
+                    { '$set' : title },
+                    upsert=False, multi=False)
 
         log.info('Finished importing titles (%ss)' % str(time.time() - start))
 
@@ -119,6 +124,10 @@ class MongoSink:
             else:
                 log.debug('Role title ' + role['title']['ident'] + ' not found')
         log.info('Finished importing titles (%ss)' % str(time.time() - start))
+
+    def get_titles(self, source_name, min_votes=0):
+        collection = 'title' if source_name is None else 'title_%s' % source_name
+        return self.m[collection].find(sort=[('key', pmongo.ASCENDING)])
 
     #@memoize
     #def get_person_average(self, role='director'):
