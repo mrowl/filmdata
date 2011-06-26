@@ -4,8 +4,6 @@ import time
 import itertools
 from functools import partial
 from decimal import Decimal
-from unicodedata import normalize
-import Levenshtein
 
 import pymongo as pmongo
 import asyncmongo as amongo
@@ -75,174 +73,10 @@ class MongoSink:
 
         log.info('Finished importing akas (%ss)' % str(time.time() - start))
 
-    def match_source_titles(self, major_name, minor_name):
-        start = time.time()
-        major = dict([ (t['key'], t) for t in 
-                       self.get_titles_for_matching(major_name) ])
-        minor = dict([ (t['key'], t) for t in
-                       self.get_titles_for_matching(minor_name) ])
-        print time.time() - start
-
-        minor_to_major = {}
-        major_to_minor = {}
-
-        def cleanup():
-            for k in major_to_minor.iterkeys():
-                if k in major:
-                    del major[k]
-            for k in minor_to_major.iterkeys():
-                if k in minor:
-                    del minor[k]
-
-        # lower is better
-        def score_pair(one, two):
-            score = 0
-
-            if one['name'] != two['name']:
-                one_names = set((one['name'], )) if not 'aka' in one else one['aka']
-                two_names = set((two['name'], )) if not 'aka' in two else two['aka']
-                if not len(one_names & two_names) > 0:
-                    pairs = [ (a, b) for a in one_names for b in two_names ] 
-                    for a, b in pairs:
-                        if a in b or b in a:
-                            score = 1
-                            break
-                    else:
-                        score += min([ Levenshtein.distance(n1, n2) for 
-                                       n1 in one_names for n2 in two_names ])
-            if one['year'] != two['year']:
-                score += one['year'] - two['year']
-            if 'director' in one and 'director' in two:
-                one_len = len(one['director'])
-                two_len = len(two['director'])
-                if one_len == two_len:
-                    score += 2 * len(one['director'] - two['director'])
-                elif one_len == 0 or two_len == 0:
-                    score += 2
-                else:
-                    smaller = min(one_len, two_len)
-                    if one_len < two_len:
-                        score += 2*len(one['director'] - two['director'])
-                    else:
-                        score += 2*len(two['director'] - one['director'])
-            return score
-
-        def best_match(title, major_keys=None, minor_keys=None):
-            if major_keys is not None:
-                if len(major_keys) == 1:
-                    return major_keys[0]
-                else:
-                    guesses = [ major[k] for k in major_keys ]
-            elif minor_keys is not None:
-                if len(minor_keys) == 1:
-                    return minor_keys[0]
-                else:
-                    guesses = [ minor[k] for k in minor_keys ]
-            else:
-                return None
-
-            best_yet = (9999, None)
-            for guess in guesses:
-                cur_score = score_pair(title, guess)
-                if cur_score < best_yet[0]:
-                    best_yet = (cur_score, guess['key'])
-            return best_yet[1]
-
-
-        def index_matcher(key_gen):
-            index = {}
-            for k, t in major.iteritems():
-                ikeys = key_gen(t)
-                for ikey in ikeys:
-                    if ikey in index:
-                        index[ikey].append(k)
-                    else:
-                        index[ikey] = [ k, ]
-                    
-            for i, title in enumerate(minor.itervalues()):
-                ikeys = key_gen(title)
-                for ikey in ikeys:
-                    if ikey in index:
-                        major_key = best_match(title, index[ikey])
-                        if major_key in major_to_minor:
-                            # possible duplicates in the minor list
-                            # see which of the these two keys is better
-                            minor_key = best_match(major[major_key],
-                                                   minor_keys=[title['key'],
-                                                               major_to_minor[major_key]])
-                            chosen = 'current' if minor_key == title['key'] else 'prev'
-                            print "Duplicate in minor list? Both matching to same major title."
-                            print "Selected %s (%s) in the end" % (str(minor_key), chosen)
-                            print "Second minor title (current one):"
-                            print title
-                            print "First minor title:"
-                            print minor[major_to_minor[major_key]]
-                            print "The major title to which they are matching"
-                            print major[major_key]
-                            print ""
-                        else:
-                            minor_key = title['key']
-                        minor_to_major[minor_key] = major_key
-                        major_to_minor[major_key] = minor_key
-            cleanup()
-
-        def key_gen_aka(title):
-            if 'aka' in title:
-                years = set((title['year'], ))
-                if 'aka_year' in title:
-                    years |= title['aka_year'] | set((title['year'] + 1,
-                                                      title['year'] - 1))
-                names = title['aka'] | set((title['name'], ))
-                return [ (year, a) for year in years for a in names ]
-            else:
-                return ((title['year'], title['name']), )
-
-        re_alpha = re.compile('[^A-Za-z0-9\_]')
-        fuzz = lambda s: re_alpha.sub('', normalize('NFKD', s))
-        key_gen_fuzzy_names = lambda t: [ (p[0], fuzz(p[1])) for
-                                    p in key_gen_aka(t) ]
-        key_gen_fuzzy_dirs = lambda t: [ (t['year'], fuzz(d)) for
-                                         d in t['director'] ] if 'director' in t else []
-
-            #for i, minor_title in enumerate(minor):
-        index_matcher(lambda t: ((t['name'], t['year']), ))
-        index_matcher(key_gen_aka)
-        index_matcher(key_gen_fuzzy_names)
-        index_matcher(key_gen_fuzzy_dirs)
-        #index_matcher(lambda t: t['name'])
-
-        print len(minor_to_major)
-        print time.time() - start
-        consume_title_matches(minor_to_major.iteritems(), minor_name, major_name)
-
-    def merge_titles(self, netflix=None, flixster=None, imdb=None):
-        pass
-
-    def consume_title_matches(self, matches, key_source, value_source):
-        key_ref = '_'.join((key_source, 'title_id'))
-        key_collection = '%s_title' % key_source
-        value_ref = '_'.join((key_value, 'title_id'))
-        value_collection = '%s_title' % value_source
-        self.m.title.ensure_index(((key_ref,
-                                    pmongo.ASCENDING),
-                                   (value_ref,
-                                    pmongo,ASCENDING)), unique=True)
-        for k, v in matches:
-            already_matched = self.m.title.find({ key_ref : k, value_ref : v })
-            # TODO: check if just one key is in there, may be a third source or
-            # something
-            if not already_matched:
-                key_title = self.m[key_collection].find({ '_id' : k })
-                value_title = self.m[value_collection].find({ '_id' : v })
-                merge_args = {
-                    key_source : key_title,
-                    value_source : value_title,
-                }
-                new_title = self.merge_titles(merge_args)
-                self.m.title.insert(new_title)
-
-
-
+    def consume_merged_titles(self, producer):
+        for title in producer:
+            self.m.title.update({ 'key' : title['key']}, title,
+                                upsert=True, multi=False)
 
     # TODO: only produce source titles which aren't matched yet
     def get_titles_for_matching(self, source):
@@ -318,9 +152,20 @@ class MongoSink:
                 log.debug('Role title ' + role['title']['ident'] + ' not found')
         log.info('Finished importing titles (%ss)' % str(time.time() - start))
 
-    def get_titles(self, source_name, min_votes=0):
-        collection = 'title' if source_name is None else 'title_%s' % source_name
-        return self.m[collection].find(sort=[('key', pmongo.ASCENDING)])
+    def get_source_titles(self, source_name, min_votes=0):
+        collection = '%s_title' % source_name
+        for t in self.m[collection].find(sort=[('_id', pmongo.ASCENDING)]):
+            t['key'] = t['_id']
+            del t['_id']
+            yield t
+
+    def get_source_title_by_key(self, name, key):
+        collection = '%s_title' % name
+        doc = self.m[collection].find_one({'_id' : key })
+        if doc:
+            doc['key'] = doc['_id']
+            del doc['_id']
+        return doc
 
     #@memoize
     #def get_person_average(self, role='director'):

@@ -27,9 +27,9 @@ class Fetch:
     
     @classmethod
     def fetch_data(cls, pull_ids=False):
-        if pull_ids:
-            cls.fetch_ids()
-        cls.fetch_info()
+        cls.fetch_ids()
+        #if pull_ids:
+        #cls.fetch_info()
 
     @classmethod
     def fetch_info(cls):
@@ -134,7 +134,7 @@ class Fetch:
             return dl
 
 
-        titles = filmdata.sink.get_titles('netflix')
+        titles = filmdata.sink.get_source_titles('netflix')
         if os.path.exists(config.flixster.last_id_query_path):
             last_query = json.load(open(config.flixster.last_id_query_path))
             print 'starting at %s' % str(last_query)

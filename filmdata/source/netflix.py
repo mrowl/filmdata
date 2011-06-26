@@ -229,6 +229,7 @@ class Produce(NetflixMixin):
     def _get_titles(cls, types=None):
         h = HTMLParser.HTMLParser()
         clean = lambda x: unicode(h.unescape(x))
+        re_award_cat = re.compile(' nominee$')
 
         def _get_availability(elem):
             format = elem.find('./category[@scheme='
@@ -345,6 +346,52 @@ class Produce(NetflixMixin):
             schema = elem.find('./link[@rel="http://schemas.netflix.com'
                                '/catalog/people.directors"]')
             return _get_people(schema) if schema is not None else {}
+        
+        def _get_award_info(elem):
+            category = elem.find('category')
+            if category == None:
+                return None
+            award = {}
+            person = elem.find('link')
+            if (person != None and
+                person.get('rel') ==
+                'http://schemas.netflix.com/catalog/person'):
+                award['person'] = {
+                    'key' : int(person.get('href').rpartition('/')[2]),
+                    'name' : person.get('title'),
+                }
+            award['name'] = category.get('scheme').rpartition('/')[2]
+            award['category'] = re_award_cat.sub('', category.get('label'))
+            award['year'] = elem.get('year')
+            return award
+
+        def _get_awards(elem):
+            schema = elem.find('./link[@rel="http://schemas.netflix.com'
+                               '/catalog/titles/awards"]')
+            if schema == None:
+                return None
+            awards_el = schema.find('awards')
+            if awards_el == None:
+                return None
+            winners = awards_el.findall('award_winner')
+            nominees = awards_el.findall('award_nominee')
+            awards = {}
+            for result, cats in (('won', winners), ('nominated', nominees)): 
+                if cats != None:
+                    cat_list = filter(lambda c: c != None, map(_get_award_info, cats))
+                    for cat in cat_list:
+                        awards_name = cat['name']
+                        awards_year = cat['year'] if cat['year'] else '0'
+                        del cat['name']
+                        del cat['year']
+                        if not awards_name in awards:
+                            awards[awards_name] = {}
+                        if not awards_year in awards[awards_name]:
+                            awards[awards_name][awards_year] = {}
+                        if not result in awards[awards_name][awards_year]:
+                            awards[awards_name][awards_year][result] = []
+                        awards[awards_name][awards_year][result].append(cat)
+            return awards
 
         def _form_title_dict(elem, key, votes=None):
             release_year = elem.find('release_year')
@@ -353,18 +400,22 @@ class Produce(NetflixMixin):
                 return None
             link = elem.find('./link[@rel="http://schemas.netflix.com'
                              '/catalog/title/ref.tiny"]')
-            href = { 'tiny' : link.get('href') } if link != None else {}
+
+            rating_text = elem.find('average_rating').text.strip()
+            rating = None if rating_text == '' else (Decimal(rating_text) *
+                                                     cls._rating_factor)
 
             title = {
                 'key' : key,
                 'name' : clean(elem.find('title').get('regular')), 
                 'year' : int(release_year.text),
-                'href' : href,
+                'href' : link.get('href') if link != None else None,
                 'type' : 'film',
-                'stat' : {
-                    'votes' : votes,
-                    'rating' : (Decimal(elem.find('average_rating').text) *
-                                cls._rating_factor),
+                'rating' : {
+                    'user' : { 
+                        'count' : votes,
+                        'mean' : rating,
+                    },
                 },
                 'synopsis' : _get_synopsis(elem),
                 'availability' : _get_availabilities(elem),
@@ -372,6 +423,7 @@ class Produce(NetflixMixin):
                 'genre' : _get_genres(elem),
                 'production' : { 'director' : _get_directors(elem) },
                 'cast' : _get_cast(elem),
+                'award' : _get_awards(elem),
             }
 
             return title

@@ -1,4 +1,5 @@
 import logging, re, os, decimal, md5, random
+from urllib import quote_plus
 from functools import partial
 
 from filmdata import config
@@ -68,12 +69,12 @@ class Produce:
     _re_title_info = re.compile('(.+?)\s+\(([0-9]{4}|\?\?\?\?).*?\)\s?\(?(V|TV|VG)?.*$')
     _re_aka_title = re.compile('^\s*\(aka (.+?) \(([0-9]{4})\)\)\s+\((.+?)\)\s*\(?([^)]+)?\)?')
 
-    _master_producer = 'stat'
-
     @classmethod
     def produce_titles(cls, types):
-        producers = {
-            'stat' : cls.produce_title_stats,
+        titles = dict([ (s['key'], s) for
+                        s in cls.produce_title_stats(types) ])
+
+        aux_producers = {
             'cast' : partial(cls.produce_roles, group='cast'),
             'production' : partial(cls.produce_roles, group='production'),
             'genre' : cls.produce_title_genres,
@@ -81,13 +82,10 @@ class Produce:
             'mpaa' : cls.produce_title_mpaas,
         }
 
-        titles = dict([ (s['key'], s) for
-                        s in producers[cls._master_producer](types) ])
         valid_keys = frozenset(titles.keys())
-        for name, func in producers.items():
-            if name != cls._master_producer:
-                for title in func(types, keys=valid_keys):
-                    titles[title['key']][name] = title[name]
+        for name, func in aux_producers.items():
+            for title in func(types, keys=valid_keys):
+                titles[title['key']][name] = title[name]
         return titles.itervalues()
 
     @classmethod
@@ -106,12 +104,14 @@ class Produce:
                                   cls._rating_factor)
                         key = cls._ident_to_key(ident.encode('utf_8'))
                         title.update({
-                            'ident' : ident,
                             'key' : key,
-                            'stat'  : {
-                                'rating' : rating,
-                                'votes' : int(match.group(2)),
-                                'distribution' : match.group(1),
+                            'href' : cls._title_href(ident),
+                            'rating'  : {
+                                'user' : {
+                                    'mean' : rating,
+                                    'count' : int(match.group(2)),
+                                    'distribution' : match.group(1),
+                                },
                             },
                         })
                         if keys is None or key in keys:
@@ -126,10 +126,7 @@ class Produce:
                 ident = line[4:].strip().decode('latin_1')
                 title = cls._parse_title_info(ident)
                 if title and title['type'] in types:
-                    title.update({
-                        'key' : cls._ident_to_key(ident.encode('utf_8')),
-                        'ident' : ident,
-                    })
+                    title['key'] = cls._ident_to_key(ident.encode('utf_8'))
                     read_next = True
             elif line[:4] == 'RE: ' and read_next:
                 line_clean = line.strip().decode('latin_1')
@@ -162,7 +159,8 @@ class Produce:
             match = re_genre.match(line_clean)
             if match and match.group(1) and match.group(2):
                 ident_new = match.group(1)
-                if title is None or ident_new != title['ident']:
+                key_new = cls._ident_to_key(ident_new.encode('utf_8'))
+                if title is None or key_new != title['key']:
                     if (title is not None and
                         title['type'] in types and
                         (keys is None or title['key'] in keys)):
@@ -170,8 +168,7 @@ class Produce:
                     title = cls._parse_title_info(ident_new)
                     if title:
                         title.update({
-                            'key' : cls._ident_to_key(ident_new.encode('utf_8')),
-                            'ident' : ident_new,
+                            'key' : key_new,
                             'genre' : [],
                         })
                 if title is not None:
@@ -207,7 +204,6 @@ class Produce:
                     elif title:
                         title.update({
                             'key' : cls._ident_to_key(stripped.encode('utf_8')),
-                            'ident' : stripped,
                             'aka' : [],
                         })
             else:
@@ -306,7 +302,6 @@ class Produce:
                         log.info('imdb %s status: %s' % (role_type, person_ident))
 
                     title['key'] = title_key
-                    title['ident'] = title_ident
                     if not title_key in titles:
                         if group is None or group == 'production':
                             title['production'] = {}
@@ -320,7 +315,7 @@ class Produce:
                         titles[title_key]['cast'].append({
                             'name' : name,
                             'key' : person_key,
-                            'ident' : person_ident,
+                            'href' : cls._person_href(person_ident),
                             'billing' : billing,
                             'character' : character,
                             'role' : role_type,
@@ -329,7 +324,7 @@ class Produce:
                         titles[title_key]['production'][role_type].append({
                             'name' : name,
                             'key' : person_key,
-                            'ident' : person_ident,
+                            'href' : cls._person_href(person_ident),
                             'billing' : billing,
                             'role' : character,
                         })
@@ -337,9 +332,28 @@ class Produce:
                         titles[title_key]['production'][role_type].append({
                             'name' : name,
                             'key' : person_key,
-                            'ident' : person_ident,
+                            'href' : cls._person_href(person_ident),
                         })
         return titles.itervalues()
+
+    @classmethod
+    def _title_href(cls, ident):
+        return 'http://www.imdb.com/find?s=tt&q=%s' % cls._super_quote(ident)
+
+    @classmethod
+    def _person_href(cls, ident):
+        return 'http://www.imdb.com/find?s=nm&q=%s' % cls._super_quote(ident)
+
+    @classmethod
+    def _super_quote(cls, s):
+        new_s = []
+        for c in s:
+            ord_val = ord(c)
+            if (ord_val > 127):
+                new_s.append('%' + str(hex(ord_val)).lstrip('0x').upper())
+            else:
+                new_s.append(quote_plus(c))
+        return ''.join(new_s)
 
     @classmethod
     def _ident_to_key(cls, ident):
