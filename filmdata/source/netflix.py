@@ -360,6 +360,7 @@ class Produce(NetflixMixin):
                 'name' : clean(elem.find('title').get('regular')), 
                 'year' : int(release_year.text),
                 'href' : href,
+                'type' : 'film',
                 'stat' : {
                     'votes' : votes,
                     'rating' : (Decimal(elem.find('average_rating').text) *
