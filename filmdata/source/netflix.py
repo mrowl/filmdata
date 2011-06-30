@@ -80,7 +80,6 @@ class NetflixMixin:
         bucket = id[:2]
         return os.path.join(cls._titles_dir_path, bucket, basename)
 
-
 class Fetch(NetflixMixin):
 
     _consumer_key = config.netflix.consumer_key
@@ -196,29 +195,228 @@ class Fetch(NetflixMixin):
                             (str(resp), content))
         return content
 
+class CatalogTitle:
+    _re_award_cat = re.compile(' nominee$')
+
+    def __init__(self, node, key, vote_count=None):
+        self.node = node
+        self.vote_count = vote_count
+        self.key = key
+
+    def get_title(self):
+        release_year = self.node.find('release_year')
+        if release_year == None or release_year.text == None:
+            log.info('Year not found on %d' % self.key)
+            return None
+        link = self.node.find('./link[@rel="alternate"]')
+
+        rating_text = self.node.find('average_rating').text.strip()
+        rating = None if not rating_text else (Decimal(rating_text) *
+                                               NetflixMixin._rating_factor)
+
+        title = {
+            'key' : self.key,
+            'name' : Produce.sanitize_html(self.node.find('title').get('regular')), 
+            'year' : int(release_year.text),
+            'href' : link.get('href') if link != None else None,
+            'type' : 'film',
+            'rating' : {
+                'user' : { 
+                    'count' : self.vote_count,
+                    'mean' : rating,
+                },
+            },
+            'synopsis' : self._get_synopsis(),
+            'availability' : self._get_availabilities(),
+            'art' : self._get_art(),
+            'genre' : self._get_genres(),
+            'production' : { 'director' : self._get_directors() },
+            'cast' : self._get_cast(),
+            'award' : self._get_awards(),
+        }
+        title['runtime'] = self._get_runtime(title['availability'])
+
+        return title
+    
+    def _get_runtime(self, availability):
+        for medium in ('dvd', 'bluray', 'instant'):
+            if availability.get(medium) and availability[medium].get('runtime'):
+                return availability[medium]['runtime']
+        return None
+
+    def _get_availability(self, node):
+        format = node.find('./category[@scheme='
+                           '"http://api.netflix.com/categories/title_formats"]')
+        if not format:
+            log.warn('No format info found')
+            return None
+
+        avail = {
+            'from' : node.get('available_from'),
+            'until' : node.get('available_until'),
+        }
+        for k in avail.keys():
+            if avail[k] != None:
+                avail[k] = datetime.fromtimestamp(int(avail[k]))
+
+        quality = format.find('./category[@scheme='
+                              '"http://api.netflix.com/categories/title_formats/quality"]')
+        if quality != None and quality.get('label') == 'HD':
+            avail['quality'] = 2
+        else:
+            avail['quality'] = 1
+        runtime_node = node.find('runtime')
+        if runtime_node != None:
+            avail['runtime'] = int(round(float(runtime_node.text) / 60))
+        else:
+            avail['runtime'] = None
+
+        mpaa = format.find('./category[@sheme="http://api.netflix.com'
+                           '/categories/mpaa_ratings"]')
+        avail['mpaa'] = mpaa.get('label') if mpaa != None else None
+
+        label_to_key_map = {
+            'Blu-ray' : 'bluray',
+            'instant' : 'instant',
+            'DVD' : 'dvd',
+        }
+        label = format.get('label')
+        if not label in label_to_key_map:
+            log.warn('Unknown format %s' % label)
+            return None
+
+        return { label_to_key_map[label] : avail }
+
+    def _get_availabilities(self):
+        nodes = list(self.node.find('./link[@rel="http://schemas.'
+                       'netflix.com/catalog/titles/f'
+                       'ormat_availability"]/delivery'
+                       '_formats'))
+        avails = {}
+        for avail in [ a for a in map(self._get_availability, nodes) if a ]:
+            avails.update(avail)
+        return avails
+            
+    def _get_art(self):
+        box_art = self.node.find('./link[@rel="http://schemas.netflix.com'
+                            '/catalog/titles/box_art"]/box_art')
+        if box_art == None:
+            log.info('No box art found for')
+            return None
+
+        art = {
+            'small' : box_art.find('./link[@rel="http://schemas.netflix.com'
+                                   '/catalog/titles/box_art/150pix_w"]'),
+            'large' : box_art.find('./link[@rel="http://schemas.netflix.com'
+                                   '/catalog/titles/box_art/284pix_w"]'),
+        }
+        for key, node in art.items():
+            if node != None:
+                art[key] = node.get('href')
+        return art
+
+    def _get_synopsis(self):
+        synopsis = {}
+        long = self.node.find('./link[@rel="http://schemas.netflix.com'
+                         '/catalog/titles/synopsis"]/synopsis')
+        if long != None:
+            synopsis['long'] = Produce.sanitize_html(long.text)
+
+        short = self.node.find('./link[@rel="http://schemas.netflix.com'
+                          '/catalog/titles/synopsis.short"]/short_synopsis')
+        if short != None:
+            synopsis['short'] = Produce.sanitize_html(short.text)
+        return synopsis
+
+    def _get_genres(self):
+        categories = self.node.findall('./category')
+        genres = []
+        for cat in categories:
+            scheme = cat.get('scheme')
+            if 'genres' in scheme:
+                genres.append(Produce.sanitize_html(cat.get('label')))
+        return genres
+
+    def _get_people(self, node):
+        found = node.findall('./people/link[@rel="http://schemas.netflix.com'
+                             '/catalog/person"]')
+        people = []
+        for i, person in enumerate(found):
+            href = person.get('href')
+            if not href:
+                continue
+            id = int(href.rpartition('/')[2])
+            name = person.get('title')
+            if not name:
+                continue
+            people.append({ 'key' : id, 'name' : name, 'billing' : i + 1 })
+        return people
+
+    def _get_cast(self):
+        schema = self.node.find('./link[@rel="http://schemas.netflix.com'
+                           '/catalog/people.cast"]')
+        return self._get_people(schema) if schema is not None else {}
+
+    def _get_directors(self):
+        schema = self.node.find('./link[@rel="http://schemas.netflix.com'
+                           '/catalog/people.directors"]')
+        return self._get_people(schema) if schema is not None else {}
+
+    def _get_award_info(self, node):
+        category = node.find('category')
+        if category == None:
+            return None
+        award = {}
+        person = node.find('link')
+        if (person != None and
+            person.get('rel') ==
+            'http://schemas.netflix.com/catalog/person'):
+            award['person'] = {
+                'key' : int(person.get('href').rpartition('/')[2]),
+                'name' : person.get('title'),
+            }
+        award['name'] = category.get('scheme').rpartition('/')[2]
+        award['category'] = CatalogTitle._re_award_cat.sub('', category.get('label'))
+        award['year'] = node.get('year')
+        return award
+
+    def _get_awards(self):
+        schema = self.node.find('./link[@rel="http://schemas.netflix.com'
+                           '/catalog/titles/awards"]')
+        if schema == None:
+            return None
+        awards_el = schema.find('awards')
+        if awards_el == None:
+            return None
+        winners = awards_el.findall('award_winner')
+        nominees = awards_el.findall('award_nominee')
+        awards = {}
+        for result, cats in (('won', winners), ('nominated', nominees)): 
+            if cats != None:
+                cat_list = filter(lambda c: c != None,
+                                  map(self._get_award_info, cats))
+                for cat in cat_list:
+                    awards_name = cat['name']
+                    awards_year = int(cat['year']) if cat['year'] else 0
+                    del cat['name']
+                    del cat['year']
+                    if not awards_name in awards:
+                        awards[awards_name] = {}
+                    if not awards_year in awards[awards_name]:
+                        awards[awards_name][awards_year] = {}
+                    if not result in awards[awards_name][awards_year]:
+                        awards[awards_name][awards_year][result] = []
+                    awards[awards_name][awards_year][result].append(cat)
+        return awards
+
 class Produce(NetflixMixin):
 
-    _re_name = re.compile('<title regular="(.*?)" short=".*?"/>')
-    _re_year = re.compile('<release_year>([0-9]+)</release_year>')
-    _re_rating = re.compile('<average_rating>([0-9]\.[0-9])</average_rating>')
-    _re_tv_test = re.compile('<category.*? label="Television" term="Television">')
     _re_film_test = re.compile('http://api.netflix.com/catalog/titles/movies/([0-9]+)')
-    _re_art_small = re.compile('<link href="([^"]*?)" rel="http://schemas.netflix.com/catalog/titles/box_art/150pix_w"')
-    _re_art_large = re.compile('<link href="([^"]*?)" rel="http://schemas.netflix.com/catalog/titles/box_art/284pix_w"')
-    _re_instant = re.compile('<category label="instant" scheme="http://api.netflix.com/categories/title_formats" term="instant">')
-    _re_instant_hd = re.compile('<category label="HD" scheme="http://api.netflix.com/categories/title_formats/quality" term="HD"/>')
-    _re_bluray = re.compile('<category label="Blu-ray" scheme="http://api.netflix.com/categories/title_formats" term="Blu-ray">')
+    _h = HTMLParser.HTMLParser()
 
-    _fieldsets = { 
-        'key' : { 'name' : _re_name, 'year' : _re_year },
-        'data' : { 'key' : _re_film_test,
-                   'art_small' : _re_art_small,
-                   'art_large' : _re_art_large,
-                   'instant' : _re_instant,
-                   'instant_hd' : _re_instant_hd,
-                   'bluray' : _re_bluray,
-                   'rating' : _re_rating }
-    }
+    @classmethod
+    def sanitize_html(cls, x):
+        return unicode(cls._h.unescape(x))
 
     @classmethod
     def produce_titles(cls, types):
@@ -227,206 +425,6 @@ class Produce(NetflixMixin):
 
     @classmethod
     def _get_titles(cls, types=None):
-        h = HTMLParser.HTMLParser()
-        clean = lambda x: unicode(h.unescape(x))
-        re_award_cat = re.compile(' nominee$')
-
-        def _get_availability(elem):
-            format = elem.find('./category[@scheme='
-                               '"http://api.netflix.com/categories/title_formats"]')
-            if not format:
-                log.warn('No format info found')
-                return None
-
-            avail = {
-                'from' : elem.get('available_from'),
-                'until' : elem.get('available_until'),
-            }
-            for k in avail.keys():
-                if avail[k] != None:
-                    avail[k] = datetime.fromtimestamp(int(avail[k]))
-
-            quality = format.find('./category[@scheme='
-                                  '"http://api.netflix.com/categories/title_formats/quality"]')
-            if quality != None and quality.get('label') == 'HD':
-                avail['quality'] = 2
-            else:
-                avail['quality'] = 1
-            runtime_node = elem.find('runtime')
-            if runtime_node != None:
-                avail['runtime'] = int(runtime_node.text)
-
-            mpaa = format.find('./category[@sheme="http://api.netflix.com'
-                               '/categories/mpaa_ratings"]')
-            avail['mpaa'] = mpaa.get('label') if mpaa != None else None
-
-            label_to_key_map = {
-                'Blu-ray' : 'bluray',
-                'instant' : 'instant',
-                'DVD' : 'dvd',
-            }
-            label = format.get('label')
-            if not label in label_to_key_map:
-                log.warn('Unknown format %s' % label)
-                return None
-
-            return { label_to_key_map[label] : avail }
-
-        def _get_availabilities(elem):
-            elems = list(elem.find('./link[@rel="http://schemas.'
-                           'netflix.com/catalog/titles/f'
-                           'ormat_availability"]/delivery'
-                           '_formats'))
-            avails = {}
-            for avail in [ a for a in map(_get_availability, elems) if a ]:
-                avails.update(avail)
-            return avails
-                
-        def _get_art(elem):
-            box_art = elem.find('./link[@rel="http://schemas.netflix.com'
-                                '/catalog/titles/box_art"]/box_art')
-            if box_art == None:
-                log.info('No box art found for')
-                return None
-
-            art = {
-                'small' : box_art.find('./link[@rel="http://schemas.netflix.com'
-                                       '/catalog/titles/box_art/150pix_w"]'),
-                'large' : box_art.find('./link[@rel="http://schemas.netflix.com'
-                                       '/catalog/titles/box_art/284pix_w"]'),
-            }
-            for key, node in art.items():
-                if node != None:
-                    art[key] = node.get('href')
-            return art
-
-        def _get_synopsis(elem):
-            synopsis = {}
-            long = elem.find('./link[@rel="http://schemas.netflix.com'
-                             '/catalog/titles/synopsis"]/synopsis')
-            if long != None:
-                synopsis['long'] = clean(long.text)
-
-            short = elem.find('./link[@rel="http://schemas.netflix.com'
-                              '/catalog/titles/synopsis.short"]/short_synopsis')
-            if short != None:
-                synopsis['short'] = clean(short.text)
-            return synopsis
-
-        def _get_genres(elem):
-            categories = elem.findall('./category')
-            genres = []
-            for cat in categories:
-                scheme = cat.get('scheme')
-                if 'genres' in scheme:
-                    genres.append(clean(cat.get('label')))
-            return genres
-
-        def _get_people(elem):
-            found = elem.findall('./people/link[@rel="http://schemas.netflix.com'
-                                 '/catalog/person"]')
-            people = []
-            for i, person in enumerate(found):
-                href = person.get('href')
-                if not href:
-                    continue
-                id = int(href.rpartition('/')[2])
-                name = person.get('title')
-                if not name:
-                    continue
-                people.append({ 'key' : id, 'name' : name, 'billing' : i + 1 })
-            return people
-
-        def _get_cast(elem):
-            schema = elem.find('./link[@rel="http://schemas.netflix.com'
-                               '/catalog/people.cast"]')
-            return _get_people(schema) if schema is not None else {}
-
-        def _get_directors(elem):
-            schema = elem.find('./link[@rel="http://schemas.netflix.com'
-                               '/catalog/people.directors"]')
-            return _get_people(schema) if schema is not None else {}
-        
-        def _get_award_info(elem):
-            category = elem.find('category')
-            if category == None:
-                return None
-            award = {}
-            person = elem.find('link')
-            if (person != None and
-                person.get('rel') ==
-                'http://schemas.netflix.com/catalog/person'):
-                award['person'] = {
-                    'key' : int(person.get('href').rpartition('/')[2]),
-                    'name' : person.get('title'),
-                }
-            award['name'] = category.get('scheme').rpartition('/')[2]
-            award['category'] = re_award_cat.sub('', category.get('label'))
-            award['year'] = elem.get('year')
-            return award
-
-        def _get_awards(elem):
-            schema = elem.find('./link[@rel="http://schemas.netflix.com'
-                               '/catalog/titles/awards"]')
-            if schema == None:
-                return None
-            awards_el = schema.find('awards')
-            if awards_el == None:
-                return None
-            winners = awards_el.findall('award_winner')
-            nominees = awards_el.findall('award_nominee')
-            awards = {}
-            for result, cats in (('won', winners), ('nominated', nominees)): 
-                if cats != None:
-                    cat_list = filter(lambda c: c != None, map(_get_award_info, cats))
-                    for cat in cat_list:
-                        awards_name = cat['name']
-                        awards_year = cat['year'] if cat['year'] else '0'
-                        del cat['name']
-                        del cat['year']
-                        if not awards_name in awards:
-                            awards[awards_name] = {}
-                        if not awards_year in awards[awards_name]:
-                            awards[awards_name][awards_year] = {}
-                        if not result in awards[awards_name][awards_year]:
-                            awards[awards_name][awards_year][result] = []
-                        awards[awards_name][awards_year][result].append(cat)
-            return awards
-
-        def _form_title_dict(elem, key, votes=None):
-            release_year = elem.find('release_year')
-            if release_year == None or release_year.text == None:
-                log.info('Year not found on %d' % key)
-                return None
-            link = elem.find('./link[@rel="http://schemas.netflix.com'
-                             '/catalog/title/ref.tiny"]')
-
-            rating_text = elem.find('average_rating').text.strip()
-            rating = None if rating_text == '' else (Decimal(rating_text) *
-                                                     cls._rating_factor)
-
-            title = {
-                'key' : key,
-                'name' : clean(elem.find('title').get('regular')), 
-                'year' : int(release_year.text),
-                'href' : link.get('href') if link != None else None,
-                'type' : 'film',
-                'rating' : {
-                    'user' : { 
-                        'count' : votes,
-                        'mean' : rating,
-                    },
-                },
-                'synopsis' : _get_synopsis(elem),
-                'availability' : _get_availabilities(elem),
-                'art' : _get_art(elem),
-                'genre' : _get_genres(elem),
-                'production' : { 'director' : _get_directors(elem) },
-                'cast' : _get_cast(elem),
-                'award' : _get_awards(elem),
-            }
-
-            return title
 
         if os.path.exists(config.netflix.votes_json_path):
             votes = json.load(open(config.netflix.votes_json_path))
@@ -446,7 +444,8 @@ class Produce(NetflixMixin):
                         vote = votes[str_key]
                     else:
                         vote = None
-                    title = _form_title_dict(elem, int(str_key), vote)
+                    title = CatalogTitle(elem, int(str_key), vote).get_title()
+                    #is_tv = title['genre'] and 'Television' in title['genre']
                     if title != None:
                         yield title
                 elem.clear()

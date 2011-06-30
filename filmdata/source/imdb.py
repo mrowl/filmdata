@@ -1,8 +1,15 @@
-import logging, re, os, decimal, md5, random
+import logging
+import re
+import os
+import decimal
+import hashlib
+import random
+from operator import itemgetter
 from urllib import quote_plus
 from functools import partial
 
 from filmdata import config
+from filmdata.lib.util import base_encode
 
 log = logging.getLogger(__name__)
 
@@ -75,6 +82,7 @@ class Produce:
                         s in cls.produce_title_stats(types) ])
 
         aux_producers = {
+            'runtime' : cls.produce_title_runtimes,
             'cast' : partial(cls.produce_roles, group='cast'),
             'production' : partial(cls.produce_roles, group='production'),
             'genre' : cls.produce_title_genres,
@@ -141,6 +149,25 @@ class Produce:
             elif not line.strip() and read_next:
                 read_next = False
                 if 'mpaa' in title and (keys is None or title['key'] in keys):
+                    yield title
+
+    @classmethod
+    def produce_title_runtimes(cls, types, keys=None):
+        re_runtime = re.compile('^(.*?)\t+.*?([0-9]+)')
+        f = open(config.imdb.runtime_path, 'r')
+        while not f.readline().strip() == '==================':
+            pass
+        for line in f:
+            line_clean = line.strip().decode('latin_1')
+            match = re_runtime.match(line_clean)
+            if match and match.group(1) and match.group(2):
+                ident = match.group(1)
+                title = cls._parse_title_info(ident)
+                key = cls._ident_to_key(ident.encode('utf_8'))
+                if (title is not None and title['type'] in types and
+                    (keys is None or key in keys)):
+                    title['key'] = key
+                    title['runtime'] = int(match.group(2))
                     yield title
 
     @classmethod
@@ -311,7 +338,7 @@ class Produce:
                         if group is None or group == 'cast':
                             title['cast'] = []
                         titles[title_key] = title 
-                    if role_type in ('actor', 'actress'):
+                    if role_type in cast_set:
                         titles[title_key]['cast'].append({
                             'name' : name,
                             'key' : person_key,
@@ -334,6 +361,15 @@ class Produce:
                             'key' : person_key,
                             'href' : cls._person_href(person_ident),
                         })
+        for title_key in titles.keys():
+            if 'cast' in titles[title_key]:
+                titles[title_key]['cast'].sort(key=itemgetter('billing'))
+            if 'production' in titles[title_key]:
+                for role_type in role_types:
+                    if (role_type not in cast_set and
+                        role_type != 'director' and
+                        role_type in titles[title_key]['production']):
+                        titles[title_key]['production'][role_type].sort(key=itemgetter('billing'))
         return titles.itervalues()
 
     @classmethod
@@ -358,8 +394,7 @@ class Produce:
     @classmethod
     def _ident_to_key(cls, ident):
         """ needs to be encoded to utf-8 """
-        key_md5 = md5.new(ident)
-        return key_md5.hexdigest()[:10]
+        return base_encode(int(hashlib.md5(ident).hexdigest()[:14], 16), 62)
 
     @classmethod
     def _parse_title_info(this, title_string):

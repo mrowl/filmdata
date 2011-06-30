@@ -2,8 +2,11 @@ import logging
 import re
 import time
 import itertools
+from filmdata.match import fuzz
+from collections import OrderedDict
 from functools import partial
 from decimal import Decimal
+from operator import itemgetter
 
 import pymongo as pmongo
 import asyncmongo as amongo
@@ -61,6 +64,15 @@ class MongoSink:
         self._io_free = True
         self._start = time.time()
 
+    def ensure_indexes(self):
+        base_key_index = {
+            'key.imdb' : pmongo.ASCENDING,
+            'key.netflix' : pmongo.ASCENDING,
+            'key.flixster' : pmongo.ASCENDING,
+        }
+        self.m.title.ensure_index(base_key_index.items())
+        self.m.person.ensure_index(base_key_index.items())
+
     def consume_title_akas(self, producer, source_name=None):
         start = time.time()
         collection = 'title' if source_name is None else 'title_%s' % source_name
@@ -74,9 +86,16 @@ class MongoSink:
         log.info('Finished importing akas (%ss)' % str(time.time() - start))
 
     def consume_merged_titles(self, producer):
-        for title in producer:
-            self.m.title.update({ 'key' : title['key']}, title,
+        self.ensure_indexes()
+        for title in itertools.imap(self._remap_id, producer):
+            self.m.title.update({'_id' : title['_id'] }, title,
                                 upsert=True, multi=False)
+
+    def consume_merged_persons(self, producer):
+        self.ensure_indexes()
+        for person in itertools.imap(self._remap_id, producer):
+            self.m.person.update(self._get_keys_spec(person['key']), person,
+                                 upsert=True, multi=False)
 
     # TODO: only produce source titles which aren't matched yet
     def get_titles_for_matching(self, source):
@@ -87,6 +106,7 @@ class MongoSink:
                 'key' : title['_id'],
                 'name' : re_title_fixer.sub('', title['name'].lower()),
                 'year' : title['year'],
+                'votes' : title['rating']['user']['count'] or 0,
             }
             if 'aka' in title and title['aka'] is not None and len(title['aka']) > 0:
                 matcher['aka'] = frozenset([ a['name'].lower() for a in
@@ -95,16 +115,22 @@ class MongoSink:
                                                    title['aka'] if a['year'] ])
             else:
                 akas = matcher['name'].split(' / ')
-                if len(akas) > 0:
+                if len(akas) > 1:
                     matcher['aka'] = frozenset(akas)
             if 'production' in title and 'director' in title['production']:
-                matcher['director'] = frozenset([ d['name'].lower() for d in
+                matcher['director'] = frozenset([ fuzz(d['name']) for d in
                                                   title['production']['director'] ])
+            if 'cast' in title:
+                cast = [ c for c in title['cast'] if
+                         c['billing'] and c['billing'] <= 8 ]
+                cast.sort(key=itemgetter('billing'))
+                matcher['cast'] = frozenset([ fuzz(c['name']) for c in cast ])
             yield matcher
 
     def consume_source_titles(self, producer, source_name):
         start = time.time()
         collection = '%s_title' % source_name
+        persons = {}
         for title_in in itertools.imap(self._clean_document, producer):
             title = dict([ (k, v) for k,v in title_in.items() if
                            k not in ('key', 'noinsert') ])
@@ -121,11 +147,6 @@ class MongoSink:
                     upsert=False, multi=False)
 
         log.info('Finished importing titles (%ss)' % str(time.time() - start))
-
-    def consume_numbers(self, producer, source_name=None):
-        for number in producer:
-            self.__update({ '_id' : self.__get_title_id(number[0]) },
-                          { '$set' : { number[1][0] : number[1][1] } })
 
     def consume_roles(self, producer, source_name=None):
         start = time.time()
@@ -152,79 +173,61 @@ class MongoSink:
                 log.debug('Role title ' + role['title']['ident'] + ' not found')
         log.info('Finished importing titles (%ss)' % str(time.time() - start))
 
+    def get_titles(self):
+        return itertools.imap(self._remap_id, self.m.title.find())
+    
+    def get_title_persons(self):
+        for title in self.m.title.find():
+            persons = []
+            for producers in title['production'].values():
+                persons.extend(producers)
+            persons.extend(title.cast)
+            yield persons
+
     def get_source_titles(self, source_name, min_votes=0):
         collection = '%s_title' % source_name
-        for t in self.m[collection].find(sort=[('_id', pmongo.ASCENDING)]):
-            t['key'] = t['_id']
-            del t['_id']
-            yield t
+        return itertools.imap(partial(self._remap_id, key='key'),
+            self.m[collection].find(sort=[('_id', pmongo.ASCENDING)]))
 
     def get_source_title_by_key(self, name, key):
         collection = '%s_title' % name
         doc = self.m[collection].find_one({'_id' : key })
-        if doc:
-            doc['key'] = doc['_id']
-            del doc['_id']
-        return doc
+        return self._remap_id(doc, key='key') if doc else None
 
-    #@memoize
-    #def get_person_average(self, role='director'):
-        #map = Code("function () {"
-                   #"    var rating = this.imdb.rating;"
-                   #"    var i = this." + role + ".length;"
-                   #"    while (i--) {"
-                   #"        emit(this." + role + "[i], this.imdb.rating);"
-                   #"    }"
-                   #"}")
-        #reduce = Code("function (key, values) {"
-                      #"    var sum = 0;"
-                      #"    var i = values.length;"
-                      #"    while (i--) {"
-                      #"        sum += values[i];"
-                      #"    }"
-                      #"    return sum;"
-                      #"}")
-        ##query = { role : { '$in' : ['Nolan, Christopher (I)', re.compile('^Hitchcock, Alfred')] } }
-        #query = { role : { '$exists' : 'true' } }
-        #mr_result =  self.__t.map_reduce(map, reduce, query=query).find(timeout=False)
-        #for doc in mr_result:
-            #count = self.__t.find({ role : doc['_id'] }).count()
-            #if count > 4:
-                #doc['avg'] = doc['value'] / count
-                #print doc
+    def _remap_id(self, thing, key='id'):
+        if '_id' in thing:
+            thing[key] = thing['_id']
+            del thing['_id']
+        elif key in thing:
+            thing['_id'] = thing[key]
+            del thing[key]
+        return thing
 
-    #@memoize
-    #def get_person_groups(self, role='dirctor'):
-        #reduce = Code("function (obj, prev) {"
-                      #"    while (i--) {"
-                      #"        prev.sum += obj.imdb.rating;"
-                      #"        prev.count++;"
-                      #"    }"
-                      #"}")
-        #groups = self.__t.group({ role : 'true' },
-                                #{ role : { '$exists' : 'true' } },
-                                #{ 'sum' : 0, 'count' : 0 }, reduce)
-        #print groups
+    def _get_keys_spec(self, keys_dict, root_key='key'):
+        dotted_keys = self._deep_object_and(keys_dict, root_key)
+        return dict([ [k, { '$in' : ( v, None ) }] for
+                      k, v in dotted_keys.items() ])
 
-    #@memoize
-    #def get_sum(self):
-        #map = Code("function () {"
-                   #"    emit(0, this.imdb.rating);"
-                   #"}")
-        #reduce = Code("function (key, values) {"
-                      #"    var sum = 0;"
-                      #"    var i = values.length;"
-                      #"    while (i--) {"
-                      #"        sum += values[i];"
-                      #"    }"
-                      #"    return sum;"
-                      #"}")
-        #return self.__t.map_reduce(map, reduce).find_one(0)['value']
+    def _deep_object_and(self, match, root_key=''):
+        dot_match = {}
+        for k, v in match.items():
+            dot_key = '.'.join((root_key, k)).lstrip('.')
+            if isinstance(v, dict):
+                sub_match = self._deep_object_and(v, dot_key)
+                for sk, sv in sub_match.items():
+                    dot_match[sk] = sv
+            else:
+                dot_match[dot_key] = v
+        return dot_match
 
     def _clean_document(self, doc):
         if isinstance(doc, dict):
             for k in doc.keys():
-                doc[k] = self._clean_document(doc[k])
+                if isinstance(k, int):
+                    doc[str(k)] = self._clean_document(doc[k])
+                    del doc[k]
+                else:
+                    doc[k] = self._clean_document(doc[k])
         elif isinstance(doc, tuple):
             doc = [ v for v in doc ]
             doc = self._clean_document(doc)
