@@ -221,20 +221,20 @@ class CatalogTitle:
             'href' : link.get('href') if link != None else None,
             'type' : 'film',
             'rating' : {
-                'user' : { 
-                    'count' : self.vote_count,
-                    'mean' : rating,
-                },
+                'count' : self.vote_count,
+                'mean' : rating,
             },
             'synopsis' : self._get_synopsis(),
             'availability' : self._get_availabilities(),
             'art' : self._get_art(),
             'genre' : self._get_genres(),
-            'production' : { 'director' : self._get_directors() },
+            'director' : self._get_directors(),
             'cast' : self._get_cast(),
             'award' : self._get_awards(),
         }
         title['runtime'] = self._get_runtime(title['availability'])
+        mpaa = self._get_mpaa(title['availability'])
+        title['mpaa'] = { 'rating' : mpaa } if mpaa else None
 
         return title
     
@@ -242,6 +242,12 @@ class CatalogTitle:
         for medium in ('dvd', 'bluray', 'instant'):
             if availability.get(medium) and availability[medium].get('runtime'):
                 return availability[medium]['runtime']
+        return None
+
+    def _get_mpaa(self, availability):
+        for medium in ('dvd', 'bluray', 'instant'):
+            if availability.get(medium) and availability[medium].get('mpaa'):
+                return availability[medium]['mpaa']
         return None
 
     def _get_availability(self, node):

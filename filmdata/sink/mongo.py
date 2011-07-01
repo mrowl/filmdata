@@ -73,23 +73,15 @@ class MongoSink:
         self.m.title.ensure_index(base_key_index.items())
         self.m.person.ensure_index(base_key_index.items())
 
-    def consume_title_akas(self, producer, source_name=None):
-        start = time.time()
-        collection = 'title' if source_name is None else 'title_%s' % source_name
-        self.m[collection].ensure_index('key', unique=True)
-        for aka in itertools.imap(self._clean_document, producer):
-            self.m[collection].update(
-                { 'key' : aka['title']['key'] },
-                { '$addToSet' : { 'aka' : aka['aka'] } },
-                upsert=False, multi=False)
-
-        log.info('Finished importing akas (%ss)' % str(time.time() - start))
-
     def consume_merged_titles(self, producer):
         self.ensure_indexes()
         for title in itertools.imap(self._remap_id, producer):
-            self.m.title.update({'_id' : title['_id'] }, title,
-                                upsert=True, multi=False)
+            if not title.get('_id'):
+                title['_id'] = self._get_seq_id('title')
+                self.m.title.insert(title)
+            else:
+                self.m.title.update({'_id' : title['_id'] }, title,
+                                    upsert=False, multi=False)
 
     def consume_merged_persons(self, producer):
         self.ensure_indexes()
@@ -106,9 +98,9 @@ class MongoSink:
                 'key' : title['_id'],
                 'name' : re_title_fixer.sub('', title['name'].lower()),
                 'year' : title['year'],
-                'votes' : title['rating']['user']['count'] or 0,
+                'votes' : 'rating' in title and title['rating'].get('count') or 0,
             }
-            if 'aka' in title and title['aka'] is not None and len(title['aka']) > 0:
+            if title.get('aka'):
                 matcher['aka'] = frozenset([ a['name'].lower() for a in
                                              title['aka'] ])
                 matcher['aka_year'] = frozenset([ int(a['year']) for a in
@@ -117,10 +109,10 @@ class MongoSink:
                 akas = matcher['name'].split(' / ')
                 if len(akas) > 1:
                     matcher['aka'] = frozenset(akas)
-            if 'production' in title and 'director' in title['production']:
+            if title.get('director'):
                 matcher['director'] = frozenset([ fuzz(d['name']) for d in
-                                                  title['production']['director'] ])
-            if 'cast' in title:
+                                                  title['director'] ])
+            if title.get('cast'):
                 cast = [ c for c in title['cast'] if
                          c['billing'] and c['billing'] <= 8 ]
                 cast.sort(key=itemgetter('billing'))
@@ -130,7 +122,6 @@ class MongoSink:
     def consume_source_titles(self, producer, source_name):
         start = time.time()
         collection = '%s_title' % source_name
-        persons = {}
         for title_in in itertools.imap(self._clean_document, producer):
             title = dict([ (k, v) for k,v in title_in.items() if
                            k not in ('key', 'noinsert') ])
@@ -193,6 +184,12 @@ class MongoSink:
         collection = '%s_title' % name
         doc = self.m[collection].find_one({'_id' : key })
         return self._remap_id(doc, key='key') if doc else None
+
+    def _get_seq_id(self, collection):
+        return self.m.seq.find_and_modify({ '_id' : collection },
+                                          { '$inc' : { 'seq' : 1 } },
+                                          upsert=True,
+                                          new=True)['seq']
 
     def _remap_id(self, thing, key='id'):
         if '_id' in thing:

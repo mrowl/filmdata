@@ -10,15 +10,17 @@ import Levenshtein
 
 import filmdata.sink
 from filmdata.lib.util import base_encode
+from filmdata.genre import Genres
 
 log = logging.getLogger('filmdata.main')
 
 TITLE_SCHEMA = {
-    'rating' : 'append',
+    'rating' : 'append_plural',
     'href' : 'append',
     'key' : 'append',
+    'mpaa' : ('imdb', 'netflix', 'flixster'),
     'year' : ('netflix', 'imdb', 'flixster'),
-    'name' : ('netflix', 'imdb', 'flixster'),
+    'name' : ('imdb', 'netflix', 'flixster'),
     'art' : ('netflix',),
     'type' : ('imdb', 'netflix', 'flixster'),
     'availability' : ('netflix',),
@@ -26,8 +28,9 @@ TITLE_SCHEMA = {
     'award' : ('netflix', 'imdb'),
     'synopsis' : ('netflix', 'imdb'),
     'genre' : ('netflix', 'imdb', 'flixster'),
-    'production' : ('imdb', 'netflix', 'flixster'),
-    'cast' : ('imdb', 'netflix', 'flixster'),
+    'director' : ('imdb', 'netflix'),
+    'writer' : ('imdb', 'netflix'),
+    'cast' : ('imdb', 'netflix'),
     'aka' : ('imdb', 'netflix'),
 }
 
@@ -52,6 +55,7 @@ def keys_hash(keys):
 class Merge:
 
     def __init__(self):
+        self._merged_titles = {}
         pass
 
     # takes in special producers used for title matching
@@ -85,16 +89,17 @@ class Merge:
                 cPickle.dump(aux, open('%s_titles.cp' % aux_name, 'w'))
 
             print '%f started aux matching: %s' % ((time.time() - start), aux_name)
-            match = Match(primary, aux)
+            match = Match(primary.copy(), aux)
             aux_matches = match.titles()
+            print '%d matches for %s' % (len(aux_matches), aux_name)
             print '%f finished aux matching: %s' % ((time.time() - start), aux_name)
 
             print '%f started aux key merging: %s' % ((time.time() - start), aux_name)
             for primary_key, aux_key in aux_matches.iteritems():
-                if matches[primary_key]:
-                    matches[primary_key][aux_name] = aux_key
-                else:
+                if matches[primary_key] is None:
                     matches[primary_key] = { aux_name : aux_key }
+                else:
+                    matches[primary_key][aux_name] = aux_key
             print '%f finished aux key merging: %s' % ((time.time() - start), aux_name)
             #cPickle.dump(matches, open('titles.cp', 'w'))
 
@@ -114,83 +119,125 @@ class Merge:
         for i, (primary_key, aux_keys) in enumerate(matches.iteritems()):
             source_keys = { primary_name : primary_key }
             aux_keys and source_keys.update(aux_keys)
-            source_key_pairs = tuple([ (k, source_keys[k]) for k in
-                                       KEY_HASH_ORDER if
-                                       k in source_keys ])
-            if primary_key in old_primaries:
-                id = old_primaries[primary_key]
-            else:
-                id = keys_hash(source_keys)
-                print "don't have this match (%s)" % str(source_key_pairs)
-                new_matches += 1
-
+            #source_key_pairs = tuple([ (k, source_keys[k]) for k in
+                                       #KEY_HASH_ORDER if
+                                       #k in source_keys ])
             source_titles = {}
             for source_name, source_key in source_keys.items():
                  source_titles[source_name] = filmdata.sink.get_source_title_by_key(
                      source_name, source_key)
-            new_title = self._merge_source_titles(id, **source_titles)
+            new_title = self._merge_source_titles(**source_titles)
+
+            if primary_key in old_primaries:
+                new_title['id'] = old_primaries[primary_key]
+            else:
+                new_matches += 1
+
             yield new_title
         print 'found %d new matches' % new_matches
         print '%f finished merging' % (time.time() - start)
 
     def produce_persons(self):
-        if os.path.exists('persons.cp'):
-            print 'start loading from file'
-            persons = cPickle.load(open('persons.cp'))
-            print 'end loading from file'
-        else:
-            main_source = 'imdb'
-            aux_sources = ('netflix', 'flixster')
-            persons = {}
-            for title in filmdata.sink.get_titles():
-                if title['cast']:
-                    for member in title['cast']:
-                        if not main_source in member['key']:
-                            continue
-                        main_key = member['key'][main_source]
-                        if main_key in persons:
-                            persons[main_key]['key'].update(member['key'])
-                            persons[main_key]['href'].update(member['href'])
-                        else:
-                            persons[main_key] = {
-                                'key' : member['key'],
-                                'href' : member['href'],
-                                'name' : member['name'],
-                            }
-            for k in persons.keys():
-                persons[k]['id'] = keys_hash(persons[k]['key'])
+        main_source = 'imdb'
+        aux_sources = ('netflix', 'flixster')
+        persons = {}
+        #for old_person in filmdata.sink.get_persons():
+        for title in filmdata.sink.get_titles():
+            members = title['cast'] if title.get('cast') else []
+            for group in [ g for g in ('director', 'writer') if title.get(g) ]:
+                for member in title[group]:
+                    member['role'] = 'director'
+                    members.append(member)
 
-            cPickle.dump(persons, open('persons.cp', 'w'))
+            for member in members:
+                if not main_source in member['key']:
+                    continue
+                main_key = member['key'][main_source]
+                if main_key in persons:
+                    persons[main_key]['key'].update(member['key'])
+                    persons[main_key]['href'].update(member['href'])
+                else:
+                    persons[main_key] = {
+                        'key' : member['key'],
+                        'href' : member['href'],
+                        'name' : member['name'],
+                    }
+
+                role = member['role']
+                role_entry = { 'title_id' : title['id'] }
+                if member.get('billing'):
+                    role_entry['billing'] = member['billing']
+                if role == 'writer' or role == 'actor' or role == 'actress':
+                    role_entry['role'] = member['role']
+                if role == 'actor' or role == 'actress':
+                    role_entry['character'] = member['character']
+
+                if not persons[main_key][role]:
+                    persons[main_key][role] = []
+                persons[main_key][role].append(role_entry)
+
         return persons.itervalues()
 
-    def _merge_source_titles(self, id, **source_titles):
-        title = { 'id' : id }
+    def _merge_source_titles(self, **source_titles):
+        title = {}
         for title_key, merger in TITLE_SCHEMA.items():
-            if merger == 'append':
+            title[title_key] = None
+            if merger in ('append', 'append_plural'):
                 title[title_key] = dict([ (k, v[title_key]) for k, v in
                                           source_titles.items() if title_key in v])
-            elif title_key == 'cast':
+                if merger == 'append_plural':
+                    plural_key = title_key + 's'
+                    for source_name, source_title in source_titles.items():
+                        if source_title.get(plural_key):
+                            for k, v in source_title[plural_key].items():
+                                title[title_key][k] = v
+            elif title_key in ('cast', 'writer', 'director'):
                 args = dict([ (k, v[title_key]) for k, v in
-                              source_titles.items() if title_key in v])
+                              source_titles.items() if
+                              title_key in v and k in merger ])
                 title[title_key] = self._merge_source_title_persons(merger, **args)
-            elif title_key == 'production':
-                title[title_key] = {}
-                for role in ('director', 'writer'):
-                    args = dict([ (k, v[title_key][role]) for k, v in
-                                  source_titles.items() if
-                                  title_key in v and role in v[title_key]])
-                    title[title_key][role] = self._merge_source_title_persons(merger,
-                                                                              **args)
+            elif title_key == 'genre':
+                raw_genres = set()
+                for source_name, source_title in source_titles.items():
+                    if source_title.get(title_key):
+                        raw_genres |= set(source_title[title_key])
+                title[title_key] = Genres(raw_genres).labels
             else:
-                for source_name in merger:
-                    if (source_name in source_titles and
-                        title_key in source_titles[source_name] and
-                        source_titles[source_name][title_key]):
-                        title[title_key] = source_titles[source_name][title_key]
-                        break
-                else:
-                    title[title_key] = None
+                source_fields = [ (s, source_titles[s][title_key]) for
+                                  s in merger if s in source_titles and
+                                  source_titles[s].get(title_key) ]
+                if source_fields:
+                    title[title_key] = source_fields.pop(0)[1]
+                    if title_key == 'name' and source_fields:
+                        for k, v in source_fields:
+                            if not title.get('aka'):
+                                title['aka'] = []
+                            title['aka'].append({
+                                'name' : v,
+                                'region' : k,
+                                'year' : source_titles[k]['year'],
+                            })
+
+        aka_name = self._pick_aka_name(title.get('aka'))
+        if aka_name:
+            title['aka'].append({
+                'name' : title['name'],
+                'region' : 'native',
+                'year' : title['year'],
+            })
+            title['name'] = aka_name
+
         return title
+
+    def _pick_aka_name(self, aka):
+        if aka:
+            us_name = [ a for a in aka if
+                        a['region'] == 'USA' and
+                        (not a.get('note') or not 
+                         'working title' in a.get('note')) ]
+            if us_name:
+                return us_name[0]
+        return None
 
     def _merge_source_title_persons(self, order, **source_persons):
         if not source_persons:
@@ -335,7 +382,6 @@ class Match:
 
         key_gen_fuzzy_years = lambda t: [ (y, fuzz(t['name'])) for y in 
                                           range(t['year'] - 1, t['year'] + 2) ]
-
 
         def key_gen_aka(title):
             if 'aka' in title:

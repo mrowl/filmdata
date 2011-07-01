@@ -1,4 +1,5 @@
 import os
+from decimal import Decimal
 import logging
 import urllib
 import json
@@ -27,14 +28,25 @@ class Fetch:
     
     @classmethod
     def fetch_data(cls, pull_ids=False):
-        cls.fetch_ids()
+        #cls.fetch_ids()
         #if pull_ids:
-        #cls.fetch_info()
+        cls.fetch_info()
 
     @classmethod
     def fetch_info(cls):
+        load_tmp_titles = lambda: map(json.loads, [ l.strip() for l in
+                                                    open(config.flixster.titles_tmp_path) ])
         def finish(results, last):
             reactor.stop()
+            fetched_titles = load_tmp_titles()
+            if os.path.exists(config.flixster.titles_path):
+                titles = json.load(open(config.flixster.titles_path))
+            else:
+                titles = {}
+            for title in fetched_titles:
+                titles[title['id']] = title
+            json.dump(titles, open(config.flixster.titles_path, 'w'))
+            os.remove(config.flixster.titles_tmp_path)
             print 'ended at %s' % str(last)
 
         def fetch_set(urls, last=None):
@@ -44,7 +56,7 @@ class Fetch:
                 title = json.loads(body.strip())
                 if 'id' in title:
                     title_jsoned = json.dumps(title)
-                    f = open(config.flixster.titles_path, 'a')
+                    f = open(config.flixster.titles_tmp_path, 'a')
                     f.write(title_jsoned + '\n')
                     f.close()
                 return True
@@ -59,10 +71,13 @@ class Fetch:
 
         fetched_titles = []
         fetched_title_ids = []
-        if os.path.exists(config.flixster.titles_path):
-            fetched_titles = map(json.loads, [ l.strip() for l in
-                                              open(config.flixster.titles_path) ])
+        if os.path.exists(config.flixster.titles_tmp_path):
+            fetched_titles = load_tmp_titles()
             fetched_title_ids = [ int(title['id']) for title in fetched_titles ]
+
+        if os.path.exists(config.flixster.titles_path):
+            fetched_title_ids += [ int(k) for k in 
+                json.load(open(config.flixster.titles_path)).keys() ]
 
         available_ids = json.load(open(config.flixster.ids_path))
         unfetched_title_ids = list(set(available_ids) - set(fetched_title_ids))
@@ -150,3 +165,80 @@ class Fetch:
             last = title_set[-1]['key'] if i >= cls._max_requests else None
             reactor.callLater(delay, fetch_set, url_set, last=last)
         reactor.run()
+
+class Produce:
+
+    name = 'flixster'
+
+    _source_max_rating = 100
+    _global_max_rating = int(config.core.max_rating)
+    _rating_factor = Decimal(_global_max_rating) / _source_max_rating
+
+    @classmethod
+    def produce_titles(cls, types):
+        flix_titles = json.load(open(config.flixster.titles_path))
+        for flix_id, flix_title in flix_titles.iteritems():
+            if not flix_title.get('title'):
+                continue
+            if not flix_title.get('year'):
+                continue
+            yield {
+                'key' : flix_title['id'],
+                'name' : flix_title.get('title'),
+                'year' : flix_title.get('year'),
+                'runtime' : flix_title.get('runtime'),
+                'synopsis' : flix_title.get('synopsis'),
+                'href' : flix_title['links'].get('alternate'),
+                'genre' : flix_title.get('genres'),
+                'mpaa' : {
+                    'rating' : flix_title.get('mpaa_rating'),
+                },
+                'consensus' : flix_title.get('critics_consensus'),
+                'ratings' : cls._get_ratings(flix_title.get('ratings')),
+                'cast' : cls._get_cast(flix_title.get('abridged_cast')),
+                'director' : cls._get_directors(flix_title.get('abridged_directors')),
+            }
+
+    @classmethod
+    def _get_directors(cls, abridged_directors):
+        if not abridged_directors:
+            return None
+        directors = []
+        for i, member in enumerate(abridged_directors):
+            directors.append({
+                'name' : member['name'],
+                'billing' : i+1,
+            })
+        return directors
+
+    @classmethod
+    def _get_cast(cls, abridged_cast):
+        if not abridged_cast:
+            return None
+        cast = []
+
+        for i, member in enumerate(abridged_cast):
+            if member.get('characters'):
+                character = member.get('characters')[0]
+            else:
+                character = None
+            cast.append({
+                'name' : member['name'],
+                'character' : character,
+                'billing' : i+1,
+            })
+        return cast
+    @classmethod
+    def _get_ratings(cls, ratings):
+        if not ratings:
+            return None
+        result = {}
+        for source, type in (('rt', 'critics'), ('flixster', 'audience')):
+            score = ratings.get('%s_score' % type)
+            label = ratings.get('%s_rating' % type)
+            if score and score > 0:
+                mean = cls._rating_factor * Decimal(score)
+                result[source] = { 'mean' :  mean}
+                if label:
+                    result[source]['label'] = label
+        return result
