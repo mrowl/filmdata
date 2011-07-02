@@ -28,8 +28,6 @@ class Fetch:
     
     @classmethod
     def fetch_data(cls, pull_ids=False):
-        #cls.fetch_ids()
-        #if pull_ids:
         cls.fetch_info()
 
     @classmethod
@@ -197,7 +195,19 @@ class Produce:
                 'ratings' : cls._get_ratings(flix_title.get('ratings')),
                 'cast' : cls._get_cast(flix_title.get('abridged_cast')),
                 'director' : cls._get_directors(flix_title.get('abridged_directors')),
+                'art' : cls._get_art(flix_title.get('posters')),
             }
+
+    @classmethod
+    def _get_art(cls, posters):
+        if not posters:
+            return None
+        art = {}
+        if posters.get('det'):
+            art['large'] = posters.get('det')
+        if posters.get('profile'):
+            art['small'] = posters.get('profile')
+        return art
 
     @classmethod
     def _get_directors(cls, abridged_directors):
