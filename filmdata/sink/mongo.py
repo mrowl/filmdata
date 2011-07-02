@@ -1,9 +1,8 @@
 import logging
 import re
 import time
+from datetime import datetime
 import itertools
-from filmdata.match import fuzz
-from collections import OrderedDict
 from functools import partial
 from decimal import Decimal
 from operator import itemgetter
@@ -13,6 +12,7 @@ import asyncmongo as amongo
 import tornado.ioloop
 
 from filmdata import config
+from filmdata.match import fuzz
 
 log = logging.getLogger(__name__)
 
@@ -88,6 +88,42 @@ class MongoSink:
         for person in itertools.imap(self._remap_id, producer):
             self.m.person.update(self._get_keys_spec(person['key']), person,
                                  upsert=True, multi=False)
+
+    def store_source_data(self, source, data, id=None, suffix=None):
+        collection = '%s_data' % source
+        if suffix:
+            collection = '_'.join((collection, suffix))
+        if id:
+            data.update({ '_id' : id })
+            data.update(self._get_timestamps())
+            self.m[collection].update({ '_id' : id }, data, upsert=True,
+                                      multi=False)
+        else:
+          self.m[collection].insert(data)
+
+    def get_source_data(self, source, suffix=None):
+        collection = '%s_data' % source
+        if suffix:
+            collection = '_'.join((collection, suffix))
+        return itertools.imap(self._remap_id, self.m[collection].find())
+    
+    def remove_source_data(self, source, suffix=None):
+        collection = '%s_data' % source
+        if suffix:
+            collection = '_'.join((collection, suffix))
+        self.m[collection].drop()
+
+
+    def _get_timestamps(self, created=True):
+        now = datetime.now()
+        timestamp = { 'modified' : now }
+        if created:
+            timestamp['created'] = now
+        return timestamp
+
+    def get_source_ids(self, source, type):
+        collection = '%s_%s_id' % (source, type)
+        return itertools.imap(self._remap_id, self.m[collection].find())
 
     # TODO: only produce source titles which aren't matched yet
     def get_titles_for_matching(self, source):
@@ -192,10 +228,10 @@ class MongoSink:
                                           new=True)['seq']
 
     def _remap_id(self, thing, key='id'):
-        if '_id' in thing:
+        if '_id' in thing and not key in thing:
             thing[key] = thing['_id']
             del thing['_id']
-        elif key in thing:
+        elif key in thing and not '_id' in thing:
             thing['_id'] = thing[key]
             del thing[key]
         return thing
