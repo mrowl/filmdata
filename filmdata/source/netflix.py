@@ -3,15 +3,14 @@ from datetime import datetime
 from decimal import Decimal
 import oauth2 as oauth
 from functools import partial
-
-import xml.etree.cElementTree as etree
-from tornado import httpclient, httputil
-import tornado.ioloop
 from cookielib import MozillaCookieJar
 from Cookie import SimpleCookie
-
+import xml.etree.cElementTree as etree
 import json
 
+from filmdata.lib.util import dson
+import filmdata.sink
+from filmdata.lib.scrape import Scrape
 from filmdata import config
 
 log = logging.getLogger(__name__)
@@ -82,27 +81,32 @@ class NetflixMixin:
 
 class Fetch(NetflixMixin):
 
+    name = 'netflix'
+
     _consumer_key = config.netflix.consumer_key
     _consumer_secret = config.netflix.consumer_secret
     _titles_url = config.netflix.titles_url
     _title_url_base = config.netflix.title_url_base
-    _call_limit = 4900
-    _master_lock = False
-    _thread_finished_count = 0
-    _thread_count = 50
+    _re_votes = re.compile('^\s+Average of ([0-9,]+) ratings:\s*$')
+    _votes = {}
 
     @classmethod
     def fetch_data(cls):
         cls._download_title_catalog()
 
     @classmethod
-    def fetch_votes(cls):
-        re_link = re.compile('^<link href="(http://www.netflix.com/Movie/[^/]+/[0-9]+)" rel="alternate" title="web page"/>$')
-        re_votes = re.compile('^\s+Average of ([0-9,]+) ratings:\s*$')
-        re_key = re.compile('^http://www.netflix.com/Movie/[^/]+/([0-9]+)')
-        headers = httputil.HTTPHeaders()
+    def fetch_votes(cls, fetch_existing=False):
+        scraper = Scrape(cls._get_title_urls(fetch_existing),
+                         cls._fetch_vote_response,
+                         scrape_callback=cls._scrape_response,
+                         max_clients=50)
+        for hkey, hvalue in cls._get_cookie_headers():
+            scraper.add_header(hkey, hvalue)
+        scraper.run()
 
-        jar = MozillaCookieJar(config.netflix.cookies_txt_path)
+    @classmethod
+    def _get_cookie_headers(cls):
+        jar = MozillaCookieJar(config.netflix.cookies_path)
         jar.load()
         for line in jar:
             cookie = SimpleCookie()
@@ -110,65 +114,56 @@ class Fetch(NetflixMixin):
             for key in ('domain', 'expires', 'path'):
                 cookie[line.name][key] = getattr(line, key)
             partitions = cookie.output().partition(' ') 
-            headers.add(partitions[0].replace('Set-', ''), partitions[2])
+            yield (partitions[0].replace('Set-', ''), partitions[2])
 
-        urls = []
+    @classmethod
+    def _get_title_urls(cls, include_found=False):
+        votes = {}
+        if not include_found:
+            log.info("Loading up old ids/votes from file and excluding")
+            votes = cls._load_votes()
+            log.info("Done loading old items: found %d" % len(votes))
+
+        re_link = re.compile('^<link href="(http://www.netflix.com/Movie/'
+                             '[^/]+/[0-9]+)" rel="alternate" '
+                             'title="web page"/>$')
+        re_key = re.compile('^http://www.netflix.com/Movie/[^/]+/([0-9]+)')
         for line in open(cls._titles_file_path):
             link_match = re_link.match(line.strip())
             if link_match and link_match.group(1):
-                key = re_key.match(link_match.group(1)).group(1)
-                urls.append((int(key),
-                             link_match.group(1).replace('//www.',
-                                                         '//movies.')))
-                #if len(urls) > 20:
-                    #break
+                key = int(re_key.match(link_match.group(1)).group(1))
+                if not key in votes:
+                    yield (key, link_match.group(1).replace('//www.',
+                                                            '//movies.'))
+    @classmethod
+    def _load_votes(cls):
+        if os.path.exists(config.netflix.votes_path):
+            return dson.load(config.netflix.votes_path)
+        return {}
 
-        master = {}
-        def on_response(resp, prev_key=None, thread_urls=None,
-                        thread_results=None, client=None):
-            if resp is None:
-                log.info('Starting thread')
-            elif resp.error:
-                log.error("Error: %s" % str(resp.error))
-            else:
-                for line in resp.buffer:
-                    votes_match = re_votes.match(line)
-                    if votes_match and votes_match.group(1):
-                        thread_results[prev_key] = int(votes_match.group(1).replace(',', ''))
-            try:
-                next = thread_urls.next()
-                client.fetch(next[1],
-                             partial(on_response, prev_key=next[0],
-                                     thread_urls=thread_urls,
-                                     thread_results=thread_results,
-                                     client=client),
-                             headers=headers)
-            except StopIteration:
-                #if not tornado.ioloop.IOLoop.instance()._callbacks:
-                    #tornado.ioloop.IOLoop.instance().stop()
-                log.info('Done this thread (trailing key = %d)' % prev_key)
-                start = True
-                while start or cls._master_lock:
-                    if not cls._master_lock:
-                        cls._master_lock = True
-                        master.update(thread_results)
-                        cls._master_lock = False
-                    start = False
-                cls._thread_finished_count += 1
-                if cls._thread_finished_count == cls._thread_count:
-                    tornado.ioloop.IOLoop.instance().stop()
-                    json.dump(master, open(config.netflix.votes_json_path, 'w'))
-
-        ioloop = tornado.ioloop.IOLoop.instance()
-        for i, url in enumerate(urls):
-            if i < cls._thread_count:
-                thread_urls = iter([ y for x, y in enumerate(urls) if
-                                     x % cls._thread_count == i % cls._thread_count ])
-                client = httpclient.AsyncHTTPClient()
-                ioloop.add_callback(partial(on_response, None, None, thread_urls, {},
-                                            client))
-        ioloop.start()
-
+    @classmethod
+    def _fetch_vote_response(cls, resp, resp_url=None):
+        if resp is None:
+            log.info('Starting thread')
+        elif resp.error:
+            log.error("Error: %s" % str(resp.error))
+        else:
+            for line in resp.buffer:
+                votes_match = cls._re_votes.match(line)
+                if votes_match and votes_match.group(1):
+                    votes = int(votes_match.group(1).replace(',', ''))
+                    vote_data = { 'votes' : votes }
+                    filmdata.sink.store_source_data('netflix', data=vote_data,
+                                                    id=resp_url[0],
+                                                    suffix='title')
+    
+    @classmethod
+    def _scrape_response(cls):
+        log.info('Done scraping! Dumping now...')
+        votes = {}
+        for data in filmdata.sink.get_source_data('netflix', 'title'):
+            votes[data['id']] = data['votes']
+        dson.dump(votes, config.netflix.votes_path)
 
     @classmethod
     def _download_title_catalog(cls):

@@ -9,8 +9,11 @@ from operator import itemgetter
 from urllib import quote_plus
 from functools import partial
 
+from filmdata.lib.util import dson
 from filmdata import config
 from filmdata.lib.util import base_encode
+from filmdata.lib.scrape import Scrape
+import filmdata.sink
 
 log = logging.getLogger(__name__)
 
@@ -28,6 +31,14 @@ class Fetch:
 
     name = 'imdb'
 
+    _id_data = {}
+    _re_html_title_id = re.compile('<p><b>Titles (Exact Matches)</b>\s+'
+                                   '(Displaying [0-9]+ Results?)<table><tr>\s+'
+                                   '<td valign="top">'
+                                   '<a href="/title/tt([0-9]+)/"')
+    _re_uri_title_id = re.compile('^http://www.imdb.com/title/tt([0-9]+)/')
+    _client = None
+
     @classmethod
     def fetch_data(this):
         this._fetch('rating')
@@ -40,6 +51,61 @@ class Fetch:
     @classmethod
     def fetch_aka_titles(this):
         this._fetch('aka')
+
+    @classmethod
+    def fetch_ids(cls):
+        scraper = Scrape(cls._get_title_urls(), cls._fetch_id_response,
+                         scrape_callback=cls._scrape_response,
+                         follow_redirects=False, max_clients=7, anon=True)
+        scraper.run()
+    
+    @classmethod
+    def _fetch_id_response(cls, resp, resp_url=None):
+        id = None
+        if resp is None:
+            log.info('Starting thread')
+        elif resp.error and getattr(resp.error, 'code', 999) < 400:
+            uri = resp.error.response.headers['Location']
+            uri_id_match = cls._re_uri_title_id.match(uri)
+            if uri_id_match:
+                id = int(uri_id_match.group(1))
+                #print 'Uri id match: %s' % uri_id_match.group(1)
+        elif resp.error:
+            log.error("Scraper error:" % str(resp.error))
+        else:
+            print 'in html match'
+            for line in resp.buffer:
+                html_id_match = cls._re_html_title_id.search(line)
+                if html_id_match:
+                    #id = int(html_id_match.group(1))
+                    print 'Html id match: %s' % html_id_match.group(1)
+        if id:
+            print id
+            print resp_url[0]
+            id_data = { 'ident' : resp_url[0] }
+            filmdata.sink.store_source_data('imdb', data=id_data,
+                                            id=id, suffix='title')
+
+    @classmethod
+    def _scrape_response(cls):
+        log.info('Done scraping! Dumping now...')
+        dson.dump(cls._get_known_ids(), config.imdb.title_ids_path)
+
+    @classmethod
+    def _get_known_ids(cls):
+        return dict([ (x['ident'], x['id']) for x in
+                      filmdata.sink.get_source_data('imdb', 'title') ])
+
+    @classmethod
+    def _get_title_urls(cls, only_new=True):
+        iterator = itertools.imap(lambda i: (i, Produce._title_href(i)),
+                                  Produce.produce_title_stats(('film'),
+                                                      idents_only=True))
+        if only_new:
+            known_ids = cls._get_known_ids()
+            return itertools.ifilter(lambda u: u[0] not in known_ids,
+                                     iterator)
+        return iterator
 
     @staticmethod
     def _fetch(name):
@@ -80,8 +146,10 @@ class Produce:
     @classmethod
     def produce_titles(cls, types):
         #cls.produce_roles(types, group='cast')
+
         titles = dict([ (s['key'], s) for
                         s in cls.produce_title_stats(types) ])
+
 
         aux_producers = {
             'runtime' : cls.produce_title_runtimes,
@@ -100,7 +168,7 @@ class Produce:
         return titles.itervalues()
 
     @classmethod
-    def produce_title_stats(cls, types, keys=None):
+    def produce_title_stats(cls, types, keys=None, idents_only=False):
         started = 0
         for line in open(config.imdb.rating_path):
             if not started:
@@ -111,17 +179,20 @@ class Produce:
                     ident = match.group(4)
                     title = cls._parse_title_info(ident)
                     if title and title['type'] in types:
-                        rating = (decimal.Decimal(match.group(3)) *
-                                  cls._rating_factor)
-                        title.update({
-                            'rating'  : {
-                                'mean' : rating,
-                                'count' : int(match.group(2)),
-                                'distribution' : match.group(1),
-                            },
-                        })
-                        if keys is None or title['key'] in keys:
-                            yield title
+                        if idents_only:
+                            yield ident
+                        else:
+                            rating = (decimal.Decimal(match.group(3)) *
+                                      cls._rating_factor)
+                            title.update({
+                                'rating'  : {
+                                    'mean' : rating,
+                                    'count' : int(match.group(2)),
+                                    'distribution' : match.group(1),
+                                },
+                            })
+                            if keys is None or title['key'] in keys:
+                                yield title
 
     @classmethod
     def produce_title_mpaas(cls, types, keys=None):
