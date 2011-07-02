@@ -231,7 +231,7 @@ class Merge:
 
     def _pick_aka_name(self, aka):
         if aka:
-            us_name = [ a for a in aka if
+            us_name = [ a['name'] for a in aka if
                         a['region'] == 'USA' and
                         (not a.get('note') or not 
                          'working title' in a.get('note')) ]
