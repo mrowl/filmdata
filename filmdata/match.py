@@ -11,13 +11,14 @@ import Levenshtein
 import filmdata.sink
 from filmdata.lib.util import base_encode
 from filmdata.genre import Genres
+from filmdata import config
 
 log = logging.getLogger('filmdata.main')
 
 TITLE_SCHEMA = {
     'rating' : 'append_plural',
     'href' : 'append',
-    'key' : 'append',
+    'alternate' : 'append_from',
     'mpaa' : ('imdb', 'netflix', 'flixster'),
     'year' : ('netflix', 'imdb', 'flixster'),
     'name' : ('imdb', 'netflix', 'flixster'),
@@ -55,6 +56,8 @@ def keys_hash(keys):
 class Merge:
 
     def __init__(self):
+        self._primary_person_source = config.core.primary_person_source
+        self._primary_title_source = config.core.primary_title_source
         self._merged_titles = {}
         pass
 
@@ -74,7 +77,7 @@ class Merge:
         if os.path.exists('primary_titles.cp'):
             primary = cPickle.load(open('primary_titles.cp'))
         else:
-            primary = dict([ (t['key'], t) for t in primary_producer ])
+            primary = dict([ (t['id'], t) for t in primary_producer ])
             cPickle.dump(primary, open('primary_titles.cp', 'w'))
         print '%f finished loading primary' % (time.time() - start)
 
@@ -85,11 +88,11 @@ class Merge:
             if os.path.exists('%s_titles.cp' % aux_name):
                 aux = cPickle.load(open('%s_titles.cp' % aux_name))
             else:
-                aux = dict([ (t['key'], t) for t in aux_producer ])
+                aux = dict([ (t['id'], t) for t in aux_producer ])
                 cPickle.dump(aux, open('%s_titles.cp' % aux_name, 'w'))
 
             print '%f started aux matching: %s' % ((time.time() - start), aux_name)
-            match = Match(primary.copy(), aux)
+            match = Match(primary.copy(), aux, primary_name, aux_name)
             aux_matches = match.titles()
             print '%d matches for %s' % (len(aux_matches), aux_name)
             print '%f finished aux matching: %s' % ((time.time() - start), aux_name)
@@ -104,19 +107,19 @@ class Merge:
             #cPickle.dump(matches, open('titles.cp', 'w'))
 
         print '%f started old_title fetch' % (time.time() - start)
-        old_titles = {}
+        #old_titles = {}
         old_primaries = {}
         for old_title in filmdata.sink.get_titles():
-            key_pairs = tuple([ (k, old_title['key'][k]) for k in
-                                KEY_HASH_ORDER if
-                                k in old_title['key'] and old_title['key'][k] ])
-            old_titles[key_pairs] = old_title['id']
-            old_primaries[old_title['key'][primary_name]] = old_title['id']
+            #key_pairs = tuple([ (k, old_title['alternate'][k]) for k in
+                                #ID_HASH_ORDER if
+                                #old_title['alternate'].get(k) ])
+            #old_titles[key_pairs] = old_title['id']
+            old_primaries[old_title['alternate'][primary_name]] = old_title['id']
         print '%f finished old_title fetch' % (time.time() - start)
 
         print '%f started mass merging' % (time.time() - start)
         new_matches = 0
-        for i, (primary_key, aux_keys) in enumerate(matches.iteritems()):
+        for primary_key, aux_keys in matches.iteritems():
             source_keys = { primary_name : primary_key }
             aux_keys and source_keys.update(aux_keys)
             #source_key_pairs = tuple([ (k, source_keys[k]) for k in
@@ -124,7 +127,7 @@ class Merge:
                                        #k in source_keys ])
             source_titles = {}
             for source_name, source_key in source_keys.items():
-                 source_titles[source_name] = filmdata.sink.get_source_title_by_key(
+                 source_titles[source_name] = filmdata.sink.get_source_title_by_id(
                      source_name, source_key)
             new_title = self._merge_source_titles(**source_titles)
 
@@ -137,9 +140,7 @@ class Merge:
         print 'found %d new matches' % new_matches
         print '%f finished merging' % (time.time() - start)
 
-    def produce_persons(self):
-        main_source = 'imdb'
-        aux_sources = ('netflix', 'flixster')
+    def produce_persons(self, primary_source):
         persons = {}
         #for old_person in filmdata.sink.get_persons():
         for title in filmdata.sink.get_titles():
@@ -150,9 +151,9 @@ class Merge:
                     members.append(member)
 
             for member in members:
-                if not main_source in member['key']:
+                if not primary_source in member['key']:
                     continue
-                main_key = member['key'][main_source]
+                main_key = member['key'][primary_source]
                 if main_key in persons:
                     persons[main_key]['key'].update(member['key'])
                     persons[main_key]['href'].update(member['href'])
@@ -182,7 +183,10 @@ class Merge:
         title = {}
         for title_key, merger in TITLE_SCHEMA.items():
             title[title_key] = None
-            if merger in ('append', 'append_plural'):
+            if title_key == 'alternate':
+                title[title_key] = dict([ (k, v['id']) for k, v in
+                                          source_titles.items() ])
+            elif merger in ('append', 'append_plural'):
                 title[title_key] = dict([ (k, v[title_key]) for k, v in
                                           source_titles.items() if title_key in v])
                 if merger == 'append_plural':
@@ -357,9 +361,11 @@ class Compare:
 
 class Match:
 
-    def __init__(self, major_set, minor_set):
+    def __init__(self, major_set, minor_set, major_name, minor_name):
         self._major = major_set
         self._minor = minor_set
+        self._major_name = major_name
+        self._minor_name = minor_name
         self._major_to_minor = {}
         self._minor_used = {}
         self._dupes = []
@@ -374,7 +380,6 @@ class Match:
                 print self._major[major_key]
 
     def titles(self):
-            #for i, minor_title in enumerate(minor):
         key_gen_fuzzy_names = lambda t: [ (p[0], fuzz(p[1])) for
                                     p in key_gen_aka(t) ]
         key_gen_fuzzy_dirs = lambda t: [ (t['year'], fuzz(d)) for
@@ -396,6 +401,10 @@ class Match:
 
         start = time.time()
 
+        print 'Matching on alternate ids'
+        self._alternate_matcher()
+        print 'Found this many matches based on alternate ids'
+        print len(self._major_to_minor)
         print 'Doing name, year index pass'
         self._index_matcher(lambda t: ((t['name'], t['year']), ))
         print 'Doing fuzzy years index pass'
@@ -409,7 +418,6 @@ class Match:
         print 'Doing the rest (finding best of remaining titles)'
         self.report()
         #try_the_rest()
-        #index_matcher(lambda t: t['name'])
 
         print time.time() - start
         return self._major_to_minor
@@ -426,14 +434,23 @@ class Match:
 
         print "This many dupes: %d" % len(self._dupes)
 
-    def _cleanup(self):
-        for k in self._major_to_minor.iterkeys():
+    def _cleanup(self, do_minor=False):
+        for k in self._major_to_minor.keys():
             if k in self._major:
                 del self._major[k]
-        #for minor_key in self._major_to_minor.itervalues():
-            #if minor_key in self._minor:
-                #minor_used[minor_key] = self._minor[minor_key]
-                #del self._minor[minor_key]
+        if do_minor:
+            for minor_key in self._major_to_minor.values():
+                if minor_key in self._minor:
+                    del self._minor[minor_key]
+
+    def _alternate_matcher(self):
+        for minor_title in self._minor.itervalues():
+            if minor_title.get('alternate'):
+                major_id = minor_title['alternate'].get(self._major_name)
+                if major_id and major_id in self._major:
+                    self._major_to_minor[major_id] = minor_title['id']
+        self._cleanup(do_minor=True)
+
 
     # lower is better
     def _best_match(self, title, guesses):
@@ -441,7 +458,7 @@ class Match:
         for guess in guesses:
             cur_score = Compare.title(title, guess)
             if cur_score <= best_yet[1]:
-                best_yet = (guess['key'], cur_score)
+                best_yet = (guess['id'], cur_score)
         return best_yet
 
     def _index_matcher(self, key_gen):
@@ -482,14 +499,14 @@ class Match:
             if (title['votes'] != prev_title['votes'] and
                 self._best_match(title, [prev_title])[0] <= .2):
                 if title['votes'] >= prev_title['votes']:
-                    minor_key = title['key']
+                    minor_key = title['id']
                     self._dupes.append(prev_title)
                 else:
                     minor_key = prev_key
                     self._dupes.append(title)
             else:
                 minor_key, s = self._best_match(self._major[major_key], [title, prev_title])
-            chosen = 'current' if minor_key == title['key'] else 'prev'
+            chosen = 'current' if minor_key == title['id'] else 'prev'
             log.debug("Duplicate in minor list? Both matching to same major title.")
             log.debug("Selected %s (%s) in the end" % (str(minor_key), chosen))
             log.debug("Second minor title (current one):")
@@ -499,5 +516,5 @@ class Match:
             log.debug("The major title to which they are matching")
             log.debug(self._major[major_key])
         else:
-            minor_key = title['key']
+            minor_key = title['id']
         return minor_key, major_key
