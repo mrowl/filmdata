@@ -1,4 +1,5 @@
 import string
+import re
 import json
 ALPHA_36 = ''.join((string.digits, string.ascii_lowercase))
 ALPHA_62 = ''.join((ALPHA_36, string.ascii_uppercase))
@@ -32,6 +33,12 @@ def base_encode(number, base=36):
 def base_decode(number, base=36):
     return int(number, base)
 
+def rname(n):
+    a = n.split(',')
+    return ' '.join(a[1:]).partition('(')[0].strip() + ' ' + a[0]
+
+clean_name = lambda x: re.sub('\(.*?\)', '', x)
+
 class dson:
 
     @staticmethod
@@ -52,3 +59,7 @@ class dson:
             data[item[0]] = item[1]
         f.close()
         return data
+
+class class_property(property):
+    def __get__(self, cls, owner):
+        return self.fget.__get__(None, owner)()
