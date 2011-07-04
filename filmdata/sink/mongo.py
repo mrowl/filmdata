@@ -74,20 +74,20 @@ class MongoSink:
         self.m.person.ensure_index(base_key_index.items())
 
     def consume_merged_titles(self, producer):
-        self.ensure_indexes()
-        for title in itertools.imap(self._remap_id, producer):
-            if not title.get('_id'):
-                title['_id'] = self._get_seq_id('title')
-                self.m.title.insert(title)
-            else:
-                self.m.title.update({'_id' : title['_id'] }, title,
-                                    upsert=False, multi=False)
+        self._consume_merged_things(producer, 'title')
 
     def consume_merged_persons(self, producer):
+        self._consume_merged_things(producer, 'person')
+
+    def _consume_merged_things(self, producer, thing_type):
         self.ensure_indexes()
-        for person in itertools.imap(self._remap_id, producer):
-            self.m.person.update(self._get_keys_spec(person['key']), person,
-                                 upsert=True, multi=False)
+        for thing in itertools.imap(self._remap_id, producer):
+            if not thing.get('_id'):
+                thing['_id'] = self._get_seq_id(thing_type)
+                self.m[thing_type].insert(thing)
+            else:
+                self.m[thing_type].update({'_id' : thing['_id'] }, thing,
+                                          upsert=False, multi=False)
 
     def store_source_data(self, source, data, id=None, suffix=None):
         collection = '%s_data' % source
@@ -131,10 +131,11 @@ class MongoSink:
         re_title_fixer = re.compile(':[^:]*? (edition|cut)$')
         for title in self.m[collection].find():
             matcher = {
-                'key' : title['_id'],
+                'id' : title['_id'],
                 'name' : re_title_fixer.sub('', title['name'].lower()),
                 'year' : title['year'],
                 'votes' : 'rating' in title and title['rating'].get('count') or 0,
+                'alternate' : title.get('alternate'),
             }
             if title.get('aka'):
                 matcher['aka'] = frozenset([ a['name'].lower() for a in
@@ -155,25 +156,53 @@ class MongoSink:
                 matcher['cast'] = frozenset([ fuzz(c['name']) for c in cast ])
             yield matcher
 
+    def get_persons_for_matching(self, source):
+        collection = '%s_person' % source
+        for person in self.m[collection].find():
+            matcher = {
+                'id' : person['_id'],
+                'name' : person['name'],
+                'titles' : frozenset(),
+                'href' : person['href'],
+            }
+            yield matcher
+
     def consume_source_titles(self, producer, source_name):
         start = time.time()
         collection = '%s_title' % source_name
         for title_in in itertools.imap(self._clean_document, producer):
-            title = dict([ (k, v) for k,v in title_in.items() if
-                           k not in ('key', 'noinsert') ])
+            title = dict([ (k, v) for k, v in title_in.items() if
+                           k not in ('id', 'noinsert') ])
             has_title = self.m[collection].find_one(
-                { '_id' : title_in['key'] })
-            if (not has_title and not 
-                ('noinsert' in title_in and title_in['noinsert'])):
-                title['_id'] = title_in['key']
+                { '_id' : title_in['id'] })
+            if not has_title and not title_in.get('noinsert'):
+                title['_id'] = title_in['id']
                 self.m[collection].insert(title)
             else:
                 self.m[collection].update(
-                    { '_id' : title_in['key'] },
+                    { '_id' : title_in['id'] },
                     { '$set' : title },
                     upsert=False, multi=False)
 
         log.info('Finished importing titles (%ss)' % str(time.time() - start))
+
+    def consume_source_persons(self, producer, source_name):
+        start = time.time()
+        collection = '%s_person' % source_name
+        clean_producer = itertools.imap(self._clean_document, producer)
+        for person_in in itertools.imap(self._remap_id, clean_producer):
+            person = dict([ (k, v) for k, v in person_in.items() if
+                            not k == 'noinsert' ])
+            has_person = self.m[collection].find_one(
+                { '_id' : person['_id'] })
+            if not has_person and not person_in.get('noinsert'):
+                self.m[collection].insert(person)
+            else:
+                self.m[collection].update(
+                    { '_id' : person['_id'] },
+                    { '$set' : person },
+                    upsert=False, multi=False)
+        log.info('Finished importing persons (%ss)' % str(time.time() - start))
 
     def consume_roles(self, producer, source_name=None):
         start = time.time()
@@ -203,6 +232,9 @@ class MongoSink:
     def get_titles(self):
         return itertools.imap(self._remap_id, self.m.title.find())
     
+    def get_persons(self):
+        return itertools.imap(self._remap_id, self.m.person.find())
+
     def get_title_persons(self):
         for title in self.m.title.find():
             persons = []
@@ -216,10 +248,10 @@ class MongoSink:
         return itertools.imap(partial(self._remap_id, key='key'),
             self.m[collection].find(sort=[('_id', pmongo.ASCENDING)]))
 
-    def get_source_title_by_key(self, name, key):
+    def get_source_title_by_id(self, name, id):
         collection = '%s_title' % name
-        doc = self.m[collection].find_one({'_id' : key })
-        return self._remap_id(doc, key='key') if doc else None
+        doc = self.m[collection].find_one({'_id' : id })
+        return self._remap_id(doc) if doc else None
 
     def _get_seq_id(self, collection):
         return self.m.seq.find_and_modify({ '_id' : collection },

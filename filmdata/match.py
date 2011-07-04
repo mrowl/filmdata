@@ -4,6 +4,7 @@ import re
 import cPickle
 import os
 import hashlib
+from operator import itemgetter
 from unicodedata import normalize
 
 import Levenshtein
@@ -55,12 +56,18 @@ def keys_hash(keys):
 
 class Merge:
 
+
     def __init__(self):
         self._primary_person_source = config.core.primary_person_source
         self._primary_title_source = config.core.primary_title_source
-        self._merged_titles = {}
         pass
 
+    @property
+    def person_ids(self):
+        if not hasattr(self, '_person_ids'):
+            self._person_ids = dict([ (p['alternate'][self._primary_person_source], p['id'])
+                                       for p in filmdata.sink.get_persons() ])
+        return self._person_ids
     # takes in special producers used for title matching
     def produce_titles(self, *title_producers):
 
@@ -104,7 +111,6 @@ class Merge:
                 else:
                     matches[primary_key][aux_name] = aux_key
             print '%f finished aux key merging: %s' % ((time.time() - start), aux_name)
-            #cPickle.dump(matches, open('titles.cp', 'w'))
 
         print '%f started old_title fetch' % (time.time() - start)
         #old_titles = {}
@@ -140,44 +146,24 @@ class Merge:
         print 'found %d new matches' % new_matches
         print '%f finished merging' % (time.time() - start)
 
-    def produce_persons(self, primary_source):
-        persons = {}
-        #for old_person in filmdata.sink.get_persons():
-        for title in filmdata.sink.get_titles():
-            members = title['cast'] if title.get('cast') else []
-            for group in [ g for g in ('director', 'writer') if title.get(g) ]:
-                for member in title[group]:
-                    member['role'] = 'director'
-                    members.append(member)
+    def produce_persons(self, primary_source, aux_sources=None):
+        primary_name, primary_persons = primary_source
+        old_primaries = {}
 
-            for member in members:
-                if not primary_source in member['key']:
-                    continue
-                main_key = member['key'][primary_source]
-                if main_key in persons:
-                    persons[main_key]['key'].update(member['key'])
-                    persons[main_key]['href'].update(member['href'])
-                else:
-                    persons[main_key] = {
-                        'key' : member['key'],
-                        'href' : member['href'],
-                        'name' : member['name'],
-                    }
+        start = time.time()
+        for oldie in filmdata.sink.get_persons():
+            old_primaries[oldie['alternate'][primary_name]] = oldie['id']
+        print '%f finished old_title fetch' % (time.time() - start)
 
-                role = member['role']
-                role_entry = { 'title_id' : title['id'] }
-                if member.get('billing'):
-                    role_entry['billing'] = member['billing']
-                if role == 'writer' or role == 'actor' or role == 'actress':
-                    role_entry['role'] = member['role']
-                if role == 'actor' or role == 'actress':
-                    role_entry['character'] = member['character']
-
-                if not persons[main_key][role]:
-                    persons[main_key][role] = []
-                persons[main_key][role].append(role_entry)
-
-        return persons.itervalues()
+        for person in primary_persons:
+            new_person = {
+                'alternate' : { 
+                    primary_name : person['id'],
+                },
+                'name' : person['name'],
+                'href' : person['href'],
+            }
+            yield new_person
 
     def _merge_source_titles(self, **source_titles):
         title = {}
@@ -196,10 +182,8 @@ class Merge:
                             for k, v in source_title[plural_key].items():
                                 title[title_key][k] = v
             elif title_key in ('cast', 'writer', 'director'):
-                args = dict([ (k, v[title_key]) for k, v in
-                              source_titles.items() if
-                              title_key in v and k in merger ])
-                title[title_key] = self._merge_source_title_persons(merger, **args)
+                title[title_key] = self._merge_source_title_persons(
+                    source_titles['imdb'].get(title_key))
             elif title_key == 'genre':
                 raw_genres = set()
                 for source_name, source_title in source_titles.items():
@@ -243,54 +227,16 @@ class Merge:
                 return us_name[0]
         return None
 
-    def _merge_source_title_persons(self, order, **source_persons):
-        if not source_persons:
+    def _merge_source_title_persons(self, persons):
+        if not persons:
             return None
-        persons = []
-        if len(source_persons) < 2:
-            source_name = source_persons.keys()[0]
-            for person in source_persons.values()[0]:
-                person['key'] = { source_name : person['key'] }
-                if 'href' in person:
-                    person['href'] = { source_name : person['href'] }
-                persons.append(person)
-            return persons
-
-        source_names = [ k for k in order if k in source_persons.keys() ]
-        mergee_source = source_names[0]
-        mergees = source_persons[mergee_source]
-
-        merged_count = 0
-        for merger_source in source_names[1:]:
-            mergers = source_persons[merger_source]
-            for mergee in mergees: 
-                mergee['key'] = { mergee_source : mergee['key'] }
-                mergee['href'] = { mergee_source : mergee['href'] }
-                for merger in mergers:
-                    if mergee['name'] == merger['name']:
-                        mergee['key'][merger_source] = merger['key']
-                        break
-                else:
-                    mergee_fuzz = fuzz(mergee['name'])
-                    for merger in mergers:
-                        if mergee_fuzz == fuzz(merger['name']):
-                            mergee['key'][merger_source] = merger['key']
-                            break
-                    else:
-                        best_yet = (999, None)
-                        for merger in mergers:
-                            score = Levenshtein.distance(merger['name'],
-                                                         mergee['name'])
-                            if score < best_yet:
-                                best_yet = (score, merger['key'])
-                        if best_yet[0] < 4:
-                            mergee['key'][merger_source] = best_yet[1]
-                persons.append(mergee)
-                if merger_source in mergee['key']:
-                    merged_count += 1
-                    if merged_count >= len(mergees):
-                        break
-        return persons
+        merged_persons = []
+        for person in persons:
+            if self.person_ids.get(person['person_id']):
+                member = person.copy()
+                member['person_id'] = self.person_ids[person['person_id']]
+                merged_persons.append(member)
+        return sorted(merged_persons, key=itemgetter('billing'))
 
 class Compare:
 

@@ -24,7 +24,7 @@ class Fetch:
     _rating_factor = int(config.core.max_rating) / 5
     _api_key = config.flixster.key
     _max_threads = 8
-    _max_requests = 4000
+    _max_requests = 4500
     
     @classmethod
     def fetch_data(cls, pull_ids=False):
@@ -181,7 +181,8 @@ class Produce:
             if not flix_title.get('year'):
                 continue
             yield {
-                'key' : flix_title['id'],
+                'id' : flix_title['id'],
+                'alternate' : cls._get_alternate(flix_title.get('alternate_ids')),
                 'name' : flix_title.get('title'),
                 'year' : flix_title.get('year'),
                 'runtime' : flix_title.get('runtime'),
@@ -197,6 +198,14 @@ class Produce:
                 'director' : cls._get_directors(flix_title.get('abridged_directors')),
                 'art' : cls._get_art(flix_title.get('posters')),
             }
+
+    @classmethod
+    def _get_alternate(cls, alternate_ids):
+        if not alternate_ids:
+            return None
+        if alternate_ids.get('imdb') and alternate_ids['imdb'].isdigit():
+            alternate_ids['imdb'] = int(alternate_ids['imdb'])
+        return alternate_ids
 
     @classmethod
     def _get_art(cls, posters):

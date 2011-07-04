@@ -79,6 +79,12 @@ class NetflixMixin:
         bucket = id[:2]
         return os.path.join(cls._titles_dir_path, bucket, basename)
 
+    @classmethod
+    def _load_votes(cls):
+        if os.path.exists(config.netflix.votes_path):
+            return dson.load(config.netflix.votes_path)
+        return {}
+
 class Fetch(NetflixMixin):
 
     name = 'netflix'
@@ -135,11 +141,6 @@ class Fetch(NetflixMixin):
                 if not key in votes:
                     yield (key, link_match.group(1).replace('//www.',
                                                             '//movies.'))
-    @classmethod
-    def _load_votes(cls):
-        if os.path.exists(config.netflix.votes_path):
-            return dson.load(config.netflix.votes_path)
-        return {}
 
     @classmethod
     def _fetch_vote_response(cls, resp, resp_url=None):
@@ -193,15 +194,15 @@ class Fetch(NetflixMixin):
 class CatalogTitle:
     _re_award_cat = re.compile(' nominee$')
 
-    def __init__(self, node, key, vote_count=None):
+    def __init__(self, node, id, vote_count=None):
         self.node = node
         self.vote_count = vote_count
-        self.key = key
+        self.id = id
 
     def get_title(self):
         release_year = self.node.find('release_year')
         if release_year == None or release_year.text == None:
-            log.info('Year not found on %d' % self.key)
+            log.info('Year not found on %d' % self.id)
             return None
         link = self.node.find('./link[@rel="alternate"]')
 
@@ -210,7 +211,7 @@ class CatalogTitle:
                                                NetflixMixin._rating_factor)
 
         title = {
-            'key' : self.key,
+            'id' : self.id,
             'name' : Produce.sanitize_html(self.node.find('title').get('regular')), 
             'year' : int(release_year.text),
             'href' : link.get('href') if link != None else None,
@@ -426,11 +427,7 @@ class Produce(NetflixMixin):
 
     @classmethod
     def _get_titles(cls, types=None):
-
-        if os.path.exists(config.netflix.votes_json_path):
-            votes = json.load(open(config.netflix.votes_json_path))
-        else:
-            votes = {}
+        votes = cls._load_votes()
 
         context = etree.iterparse(cls._titles_file_path,
                                   events=('start', 'end'))
@@ -440,12 +437,12 @@ class Produce(NetflixMixin):
             if event == 'end' and elem.tag == 'catalog_title':
                 film_match = cls._re_film_test.match(elem.find('id').text)
                 if film_match:
-                    str_key = film_match.group(1)
-                    if str_key in votes:
-                        vote = votes[str_key]
+                    str_id = film_match.group(1)
+                    if str_id in votes:
+                        vote = votes[str_id]
                     else:
                         vote = None
-                    title = CatalogTitle(elem, int(str_key), vote).get_title()
+                    title = CatalogTitle(elem, int(str_id), vote).get_title()
                     #is_tv = title['genre'] and 'Television' in title['genre']
                     if title != None:
                         yield title
