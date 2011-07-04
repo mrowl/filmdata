@@ -30,6 +30,8 @@ class Genres:
         re.compile('^(romantic) (.+?)$'),
         re.compile('^(classic) (.+?)$'),
         re.compile('^(crime) (dramas)$'),
+        re.compile('^(sports) (dramas)$'),
+        re.compile('^(social issue) (dramas)$'),
         re.compile('^(.+?) (period pieces)$'),
         re.compile('^(.+?) (thrillers)$'),
         re.compile('^(.+?) (classics)$'),
