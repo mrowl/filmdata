@@ -153,7 +153,7 @@ class Merge:
         start = time.time()
         for oldie in filmdata.sink.get_persons():
             old_primaries[oldie['alternate'][primary_name]] = oldie['id']
-        print '%f finished old_title fetch' % (time.time() - start)
+        print '%f finished old_person fetch' % (time.time() - start)
 
         for person in primary_persons:
             new_person = {
@@ -163,6 +163,8 @@ class Merge:
                 'name' : person['name'],
                 'href' : person['href'],
             }
+            if person['id'] in old_primaries:
+                new_person['id'] = old_primaries[person['id']]
             yield new_person
 
     def _merge_source_titles(self, **source_titles):
@@ -232,10 +234,13 @@ class Merge:
             return None
         merged_persons = []
         for person in persons:
-            if self.person_ids.get(person['person_id']):
-                member = person.copy()
+            member = dict([ (k, v) for k, v in person.items() if
+                            k not in ('person_id', 'name') ])
+            if person.get('person_id') and self.person_ids.get(person['person_id']):
                 member['person_id'] = self.person_ids[person['person_id']]
-                merged_persons.append(member)
+            else:
+                member['name'] = person['name']
+            merged_persons.append(member)
         return sorted(merged_persons, key=itemgetter('billing'))
 
 class Compare:

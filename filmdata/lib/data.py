@@ -123,7 +123,7 @@ class Data:
         for r in self.rows:
             print r
 
-    def add_field(self, name, ops):
+    def add_field(self, name, ops, arg_min=1):
         """
         Add a new column/field to each of the rows/dictionaries in the table.
         See class example for more info.
@@ -137,8 +137,11 @@ class Data:
         """
         new_rows = []
         for r in self.rows:
-            args = [ r[f] for f in ops[1:] if f in r ]
-            r[name] = ops[0](*args)
+            args = [ r[f] for f in ops[1:] if r.get(f) is not None ]
+            if len(args) >= arg_min:
+                r[name] = ops[0](*args)
+            else:
+                r[name] = None
             new_rows.append(r)
         self.rows = new_rows
 
@@ -156,7 +159,10 @@ class Data:
         """
         new_rows = []
         for r in self.rows:
-            r[label] = self.bayes(r[r_field], r[v_field], m_val, c_val)
+            if r.get(r_field) and r.get(v_field) and r[v_field] > m_val:
+                r[label] = self.bayes(r[r_field], r[v_field], m_val, c_val)
+            else:
+                r[label] = None
             new_rows.append(r)
         self.rows = new_rows
 
@@ -173,26 +179,32 @@ class Data:
             self.rows[i][name] = sum([self.rows[i][f] for f in fields])\
                 / len(fields)
 
-    @memoize
-    def get_sum(self, field):
+    def get_sum(self, field, min=None):
         """
         Get the sum of one column across the table.
         Arguments:
             field - the name of the column to sum
         Returns a number representing the sum.
         """
-        return sum([ r[field] for r in self.rows ])
+        if not min:
+            return sum([ r[field] for r in self.rows ])
+        else:
+            return sum([ r[field] for r in self.rows if
+                         r.get(min[0]) and r[min[0]] > min[1] ])
 
-    @memoize
-    def get_count(self):
+    def get_count(self, min=None):
         """
         Get the total number of rows.
         Returns integer of the number of rows in the table.
         """
-        return len(self.rows)
+        if not min:
+            return len(self.rows)
+        else:
+            return len([ 1 for r in self.rows if
+                         r.get(min[0]) and r[min[0]] > min[1] ])
 
     @memoize
-    def get_mean(self, field, divisor_sum=None):
+    def get_mean(self, field, divisor_sum=None, min=None):
         """
         Get the mean for one column across the table.
         Arguments:
@@ -202,6 +214,6 @@ class Data:
         Returns a number representing a mean.
         """
         if not divisor_sum:
-            return self.get_sum(field) / self.get_count()
+            return self.get_sum(field, min=min) / self.get_count(min=min)
         else:
-            return self.get_sum(field) / self.get_sum(divisor_sum)
+            return self.get_sum(field, min=min) / self.get_sum(divisor_sum, min=min)

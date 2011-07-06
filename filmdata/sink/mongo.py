@@ -63,15 +63,19 @@ class MongoSink:
         self._io = None
         self._io_free = True
         self._start = time.time()
+        self._role_groups = config.core.active_role_groups.split()
 
     def ensure_indexes(self):
         base_key_index = {
-            'key.imdb' : pmongo.ASCENDING,
-            'key.netflix' : pmongo.ASCENDING,
-            'key.flixster' : pmongo.ASCENDING,
+            'alternate.imdb' : pmongo.ASCENDING,
+            'alternate.netflix' : pmongo.ASCENDING,
+            'alternate.flixster' : pmongo.ASCENDING,
         }
         self.m.title.ensure_index(base_key_index.items())
         self.m.person.ensure_index(base_key_index.items())
+        for group in self._role_groups:
+            self.m.title.ensure_index([('.'.join((group, 'person_id')),
+                                        pmongo.ASCENDING)])
 
     def consume_merged_titles(self, producer):
         self._consume_merged_things(producer, 'title')
@@ -88,6 +92,14 @@ class MongoSink:
             else:
                 self.m[thing_type].update({'_id' : thing['_id'] }, thing,
                                           upsert=False, multi=False)
+
+    def consume_metric(self, name, producer):
+        for id, row in producer:
+            if name in ('title', 'person'):
+                self.m[name].update(
+                    { '_id' : id },
+                    { '$set' : { 'metric' : row } },
+                    upsert=False, multi=False)
 
     def store_source_data(self, source, data, id=None, suffix=None):
         collection = '%s_data' % source
@@ -231,6 +243,38 @@ class MongoSink:
 
     def get_titles(self):
         return itertools.imap(self._remap_id, self.m.title.find())
+
+    def get_title_ratings(self):
+        return itertools.imap(self._remap_id,
+                              self.m.title.find(fields={'rating' : 1}))
+    
+    def get_person_role_titles(self):
+        self.ensure_indexes()
+        for person in self.m.person.find(fields={ '_id' : 1 },
+                                         sort=[('_id', pmongo.ASCENDING)]):
+            person_id = person['_id']
+            for group in self._role_groups:
+                titles = []
+                group_key = '.'.join((group, 'person_id'))
+                title_fields = { 'year' : 1, 'rating' : 1,
+                                 'metric' : 1, group : 1 }
+                for title in self.m.title.find({ group_key : person_id },
+                                               fields=title_fields):
+                    for member in title[group]:
+                        if member.get('person_id') == person_id:
+                            rating = title['rating']
+                            if 'metric' in title and title['metric'].get('average'):
+                                rating['average'] = title['metric']['average']
+                            titles.append({
+                                'rating' : title['rating'],
+                                'year' : title['year'],
+                                'metric' : title.get('metric'),
+                                'billing' : member.get('billing'),
+                            })
+                        break
+                if titles:
+                    titles.sort(key=itemgetter('year'))
+                    yield (person_id, group), titles
     
     def get_persons(self):
         return itertools.imap(self._remap_id, self.m.person.find())

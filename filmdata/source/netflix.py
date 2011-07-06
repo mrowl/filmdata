@@ -437,12 +437,9 @@ class Produce(NetflixMixin):
             if event == 'end' and elem.tag == 'catalog_title':
                 film_match = cls._re_film_test.match(elem.find('id').text)
                 if film_match:
-                    str_id = film_match.group(1)
-                    if str_id in votes:
-                        vote = votes[str_id]
-                    else:
-                        vote = None
-                    title = CatalogTitle(elem, int(str_id), vote).get_title()
+                    id = int(film_match.group(1))
+                    vote = votes.get(id)
+                    title = CatalogTitle(elem, id, vote).get_title()
                     #is_tv = title['genre'] and 'Television' in title['genre']
                     if title != None:
                         yield title

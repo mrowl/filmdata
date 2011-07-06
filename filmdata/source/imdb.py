@@ -75,7 +75,7 @@ class Fetch(ImdbMixin):
             url_source = cls._get_person_urls
         scraper = Scrape(url_source(title_types), cls._fetch_id_response,
                          scrape_callback=partial(cls._scrape_response, type=type),
-                         follow_redirects=False, max_clients=10, anon=True)
+                         follow_redirects=False, max_clients=12, anon=True)
         scraper.run()
     
     @classmethod
@@ -238,6 +238,7 @@ class Produce(ImdbMixin):
                     title_id = role['title_id']
                     del role['title_id']
                     role['person_id'] = person['id']
+                    role['name'] = person['name']
                     if not title_id in titles:
                         titles[title_id] = { 'id' : title_id } 
                         titles[title_id][group] = []
@@ -278,9 +279,10 @@ class Produce(ImdbMixin):
                 if person_ident and person['roles']:
                     if idents_only:
                         yield person_ident
-                    elif person_ident in cls.person_ident_to_id:
-                        person['id'] = cls.person_ident_to_id[person_ident]
-                        person['href'] = cls._person_href(person['id'])
+                    else:
+                        person['id'] = cls.person_ident_to_id.get(person_ident)
+                        person['href'] = cls._person_href(person['id'],
+                                                          ident=person_ident)
                         if sans_roles:
                             del person['roles']
                         yield person
@@ -473,13 +475,13 @@ class Produce(ImdbMixin):
 
     @classmethod
     def _title_href(cls, id, ident=None):
-        if ident:
+        if not id and ident:
             return 'http://www.imdb.com/find?s=tt&q=%s' % cls._super_quote(ident)
         return 'http://www.imdb.com/title/tt%s/' % str(id).rjust(7, '0')
 
     @classmethod
     def _person_href(cls, id, ident=None):
-        if ident:
+        if not id and ident:
             return 'http://www.imdb.com/find?s=nm&q=%s' % cls._super_quote(ident)
         return 'http://www.imdb.com/name/nm%s/' % str(id).rjust(7, '0')
 

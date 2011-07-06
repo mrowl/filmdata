@@ -3,7 +3,9 @@ A very simple plugin manager which basically just manages all the modules in
 a package.  Plugin == Module throughout.
 """
 
-import os, pkgutil
+import os
+import pkgutil
+from inspect import isclass, getmembers
 
 class PluginNotFoundException(Exception):
     """Exception to raise when a plugin isn't found"""
@@ -35,7 +37,7 @@ class PluginManager(object):
             print source.schema
     """
 
-    def __init__(self, pkg_name, pkg_path, objects=('*')):
+    def __init__(self, pkg_name, pkg_path, objects=('*'), parent_class=None):
         """
         Create a new plugin manager.
         Arguments:
@@ -45,11 +47,14 @@ class PluginManager(object):
             objects - the names of the particular classes, functions, etc. to
                 load for each module in the package when using __import__.
                 e.g. ('Fetch', 'Produce', 'schema') for a source
+            parent_class - instead of loading specific objects, load anything
+                that subclasses this parent class
         """
         plugins_path = [os.path.dirname(pkg_path)]
         self.list = [name for _, name, _ in pkgutil.iter_modules(plugins_path)]
         self._pkg_name = pkg_name
         self._objects = objects
+        self._parent_class = parent_class
 
     def load(self, name, objects=None):
         """
@@ -59,13 +64,25 @@ class PluginManager(object):
             objects - see description of similar arg for __init__
         Returns the module object
         """
-        if objects == None:
-            objects = self._objects
         if not name in self.list:
             raise PluginNotFoundException("%s plugin %s not found" %
                                           (self._pkg_name, name))
-        plugin = __import__('%s.%s' % (self._pkg_name, name),
-                            None, None, objects)
+        if self._parent_class is None:
+            if objects == None:
+                objects = self._objects
+            plugin = __import__('%s.%s' % (self._pkg_name, name),
+                                None, None, objects)
+        else:
+            plugin_mod = __import__('%s.%s' % (self._pkg_name, name),
+                                    None, None, '*')
+            for obj_name, obj in getmembers(plugin_mod, isclass):
+                if (issubclass(obj, self._parent_class) and
+                    obj_name != self._parent_class.__name__):
+                    plugin = obj
+                    break
+            else:
+                raise PluginNotFoundException("%s plugin %s has no proper subclass" %
+                                              (self._pkg_name, name))
         return plugin
 
     def iter(self, objects=None):
