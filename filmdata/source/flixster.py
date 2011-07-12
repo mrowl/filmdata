@@ -104,7 +104,7 @@ class Fetch:
         reactor.run()
 
     @classmethod
-    def fetch_ids(cls):
+    def fetch_ids(cls, title_types=None, id_types=None):
         arg_maker = lambda title: {
             'apikey' : cls._api_key,
             'q' : title['name'].lower().encode('utf-8'),
