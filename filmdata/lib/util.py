@@ -39,6 +39,12 @@ def rname(n):
 
 clean_name = lambda x: re.sub('\(.*?\)', '', x)
 
+def extract_name_suffix(name): 
+    match = re.search('^.*?(\([IVXLC]+\))$', name.strip())
+    if match:
+        return match.group(1)
+    return ''
+
 class dson:
 
     @staticmethod

@@ -4,12 +4,11 @@ import re
 import os
 import decimal
 import hashlib
-import random
 from operator import itemgetter
 from urllib import quote_plus
 from functools import partial
 
-from filmdata.lib.util import dson, rname, clean_name, class_property
+from filmdata.lib.util import dson, rname, clean_name, class_property, extract_name_suffix
 from filmdata import config
 from filmdata.lib.util import base_encode
 from filmdata.lib.scrape import Scrape
@@ -52,6 +51,8 @@ class Fetch(ImdbMixin):
                                    '(Displaying [0-9]+ Results?)<table><tr>\s+'
                                    '<td valign="top">'
                                    '<a href="/title/tt([0-9]+)/"')
+    _popular_id_string = '^\s*<p><b>Popular Names</b>.*?<br><a href="/name/nm([0-9]+)/" onclick=".*?">%s</a>\s*<small>'
+    _partial_id_string = '<a href="/name/nm([0-9]+)/" onclick="[^"]+">%s</a>\s*(:?%s)?\s*<small>'
     _re_uri_id = re.compile('^http://www.imdb.com/(title|name)/(nm|tt)([0-9]+)/')
     _client = None
 
@@ -81,6 +82,7 @@ class Fetch(ImdbMixin):
     @classmethod
     def _fetch_id_response(cls, resp, resp_url=None):
         id = None
+        type = 'person' if 's=nm' in resp_url[1] else 'title'
         if resp is None:
             log.info('Starting thread')
         elif resp.error and getattr(resp.error, 'code', 999) < 400:
@@ -88,20 +90,34 @@ class Fetch(ImdbMixin):
             uri_id_match = cls._re_uri_id.match(uri)
             if uri_id_match:
                 id = int(uri_id_match.group(3))
-                type = 'person' if uri_id_match.group(1) == 'name' else 'title'
-                #print 'Uri id match: %s' % uri_id_match.group(1)
+                print 'uri matched %s %s to %s' % (type, resp_url[0],
+                                                      str(id))
+            else:
+                print 'redirect with no uri id match: %s' % uri
         elif resp.error:
             log.error("Scraper error:" % str(resp.error))
-        else:
-            print 'in html match'
+        elif type == 'person':
+            re_popular_id = re.compile(cls._popular_id_string %
+                                       rname(clean_name(resp_url[0])),
+                                       re.I)
+            suffix = extract_name_suffix(resp_url[0])
+            if suffix:
+                suffix = suffix.replace('(', '\(', 1).replace(')', '\)', 1)
+            re_partial_id = re.compile(cls._partial_id_string %
+                                       (rname(clean_name(resp_url[0])),
+                                        suffix), re.I)
             for line in resp.buffer:
-                html_id_match = cls._re_html_title_id.search(line)
+                html_id_match = re_popular_id.match(line)
+                if not html_id_match:
+                    html_id_match = re_partial_id.search(line)
                 if html_id_match:
-                    #id = int(html_id_match.group(1))
-                    print 'Html id match: %s' % html_id_match.group(1)
+                    id = int(html_id_match.group(1))
+                    print 'html matched %s %s to %s' % (type, resp_url[0],
+                                                        str(id))
+                    break
+            else:
+                print 'No match for %s %s' % (type, resp_url[0])
         if id:
-            print id
-            print resp_url[0]
             id_data = { 'ident' : resp_url[0] }
             filmdata.sink.store_source_data('imdb', data=id_data,
                                             id=id, suffix=type)
