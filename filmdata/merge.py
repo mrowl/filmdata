@@ -5,6 +5,7 @@ from operator import itemgetter
 import filmdata.sink
 from filmdata import config
 from filmdata.genre import Genres
+from filmdata.match import match_iter
 
 log = logging.getLogger('filmdata.main')
 
@@ -38,9 +39,10 @@ PERSON_SCHEMA = {
 
 class Merge:
 
-    def __init__(self):
+    def __init__(self, type='title'):
         self._primary_person_source = config.core.primary_person_source
         self._primary_title_source = config.core.primary_title_source
+        self._type = type
 
     @property
     def person_ids(self):
@@ -49,34 +51,37 @@ class Merge:
                                        for p in filmdata.sink.get_persons() ])
         return self._person_ids
 
-    def titles(self):
+    def produce(self, match_status=None):
+        if self._type == 'title':
+            return self.produce_titles(match_status)
+        if self._type == 'person':
+            return self.produce_persons(match_status)
+
+    def produce_titles(self, match_status=None):
         start = time.time()
-        for match in filmdata.sink.get_matches('title'):
+        for match in filmdata.sink.get_matches('title', status=match_status):
             sources = dict([ (n, filmdata.sink.get_source_title_by_id(n, i)) for
-                             n, i in match.items() if n != 'id' ])
+                             n, i in match_iter(match) ])
             yield self._merge_source_titles(match['id'], **sources)
         print '%f finished merging' % (time.time() - start)
 
-    def produce_persons(self, primary_source, aux_sources=None):
-        primary_name, primary_persons = primary_source
-        old_primaries = {}
+    def produce_persons(self, match_status=None):
+        for match in filmdata.sink.get_matches('person', status=match_status):
+            sources = dict([ (n, filmdata.sink.get_source_person_by_id(n, i)) for
+                             n, i in match_iter(match) ])
+            yield self._merge_source_persons(match['id'], **sources)
 
-        start = time.time()
-        for oldie in filmdata.sink.get_persons():
-            old_primaries[oldie['alternate'][primary_name]] = oldie['id']
-        print '%f finished old_person fetch' % (time.time() - start)
-
-        for person in primary_persons:
-            new_person = {
-                'alternate' : { 
-                    primary_name : person['id'],
-                },
-                'name' : person['name'],
-                'href' : person['href'],
-            }
-            if person['id'] in old_primaries:
-                new_person['id'] = old_primaries[person['id']]
-            yield new_person
+    def _merge_source_persons(self, id, **source_persons):
+        primary_name, primary_person = source_persons.items()[0]
+        person = {
+            'id' : id,
+            'alternate' : { 
+                primary_name : primary_person['id'],
+            },
+            'name' : primary_person['name'],
+            'href' : primary_person['href'],
+        }
+        return person
 
     def _merge_source_titles(self, id, **source_titles):
         title = { 'id' : id }

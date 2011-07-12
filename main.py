@@ -4,6 +4,8 @@ from optparse import OptionParser
 
 import filmdata
 import filmdata.source
+import filmdata.match
+import filmdata.merge
 from filmdata import config
 from filmdata.metric import manager as metric_manager
 
@@ -32,17 +34,18 @@ def run_data_fetch(source):
 
 def run_data_import(source, types):
     log.info('Importing data from source: %s' % source.name)
-    filmdata.sink.consume_titles(source.produce_titles(types), source.name)
+    filmdata.sink.consume_source_titles(source.produce_titles(types), source.name)
 
 def crunch(option, opt_str, value, parser):
     if value and value != 'all':
         names = value.split(',')
         for name in names:
-            metric = metric_manager.load(name)
-            metric.run(filmdata.sink)
+            metric = metric_manager.load(name)()
+            filmdata.sink.consume_metric(name, metric())
     else:
-        for name, metric in metric_manager.iter():
-            metric.run(filmdata.sink)
+        for name, metric_class in metric_manager.iter():
+            metric = metric_class()
+            filmdata.sink.consume_metric(name, metric())
 
 def main():
     if config.core.active_sink == 'sqlalchemy':
@@ -65,31 +68,28 @@ def main():
                       dest="sink_install",
                       help="""Install your chosen sink
                       (i.e. build data(base|store) schema)""")
-    parser.add_option("--roles", action="store_true",
-                      dest="roles_both",
-                      help="Fetch and import all the active roles in the config (from %s)" % master_source_name)
-    parser.add_option("--roles-fetch", action="store_true",
-                      dest="roles_fetch",
-                      help="Fetch all the data for active roles in the config (from %s)" % master_source_name)
-    parser.add_option("--roles-import", action="store_true",
-                      dest="roles_import",
-                      help="Import all the data for active roles in the config (from %s)" % master_source_name)
-    parser.add_option("--aka", action="store_true",
-                      dest="aka_both",
-                      help="Fetch and import the aka titles data (from %s) % master_source_name")
-    parser.add_option("--aka-fetch", action="store_true",
-                      dest="aka_fetch",
-                      help="Fetch the aka titles data (from %s)" % master_source_name)
-    parser.add_option("--aka-import", action="store_true",
-                      dest="aka_import",
-                      help="Import the aka titles data (from %s)" % master_source_name)
     parser.add_option("-c", "--crunch", action="callback",
                       callback=crunch, type="string",
                       help="Run the numbers")
+
+    parser.add_option("-t", "--title", action="store_true", dest="op_title",
+                      help="Limit the import to just titles")
+    parser.add_option("-p", "--person", action="store_true", dest="op_person",
+                      help="Limit the import to just persons")
     parser.add_option("-f", "--fetch", action="store", dest="fetches",
                       help="Run data fetch for source(s) (comma separated)")
     parser.add_option("-i", "--import", action="store", dest="imports",
                       help="Run data import for source(s) (comma separated)")
+    parser.add_option("-v", "--votes", action="store_true", dest="op_votes",
+                      help="Limit the fetch to votes for specified source")
+    parser.add_option("-d", "--ids", action="store", dest="op_ids",
+                      help="Limit the fetch to ids for specified source")
+    parser.add_option("--match", action="store_true", dest="match",
+                      help="match all source things into tuples of their ids")
+    parser.add_option("--merge", action="store_true", dest="merge",
+                      help="merge all the matched id tuples")
+    parser.add_option("--all", action="store_true", dest="all",
+                      help="operate on all items instead of just diff ones")
     (options, args) = parser.parse_args()
     
     if options.sink_init:
@@ -97,40 +97,55 @@ def main():
     elif options.sink_install:
         filmdata.sink.install()
 
-    active_role_types = config.core.active_role_types.split()
     active_title_types = config.core.active_title_types.split()
+    active_role_types = config.core.active_role_types.split()
+
+    if options.all:
+        status = ('all',)
+    else:
+        status = ('new', 'updated', None)
+
+    if options.match:
+        if options.op_title:
+            match = filmdata.match.Match('title')
+            filmdata.sink.consume_matches(match.produce(status=status), 'title')
+        elif options.op_person:
+            match = filmdata.match.Match('person')
+            filmdata.sink.consume_matches(match.produce(status=status), 'person')
+
+    if options.merge:
+        if options.op_title:
+            merge = filmdata.merge.Merge('title')
+            filmdata.sink.consume_merged_titles(
+                merge.produce(match_status=status))
+        elif options.op_person:
+            merge = filmdata.merge.Merge('person')
+            filmdata.sink.consume_merged_persons(
+                merge.produce(match_status=status))
 
     if options.fetches:
         for name in options.fetches.split(','):
             source = filmdata.source.manager.load(name)
-            run_data_fetch(source.Fetch)
+            if options.op_votes:
+                source.Fetch.fetch_votes()
+            elif options.op_ids:
+                source.Fetch.fetch_ids(active_title_types, options.op_ids)
+            else:
+                run_data_fetch(source.Fetch)
 
     if options.imports:
         for name in options.imports.split(','):
             source = filmdata.source.manager.load(name)
-            run_data_import(source.Produce, active_title_types)
-
-    master_source = filmdata.source.manager.load(master_source_name)
-
-    if options.aka_both:
-        log.info('Running both the fetch and import for aka titles...')
-        run_aka_fetch(master_source.Fetch)
-        run_aka_import(master_source.Produce, active_title_types)
-    elif options.aka_fetch:
-        run_aka_fetch(master_source.Fetch)
-    elif options.aka_import:
-        run_aka_import(master_source.Produce, active_title_types)
-
-    if options.roles_both:
-        log.info('Running both the fetch and import for roles...')
-        run_roles_fetch(master_source.Fetch, active_role_types)
-        run_roles_import(master_source.Produce, active_title_types,
-                         active_role_types)
-    elif options.roles_fetch:
-        run_roles_fetch(master_source.Fetch, active_role_types)
-    elif options.roles_import:
-        run_roles_import(master_source.Produce, active_title_types,
-                         active_role_types)
+            if options.op_title:
+                filmdata.sink.consume_source_titles(
+                    source.Produce.produce_titles(active_title_types),
+                    source.Produce.name)
+            elif options.op_person:
+                for role_type in active_role_types:
+                    filmdata.sink.consume_source_persons(
+                        source.Produce.produce_persons(role_type,
+                                                       sans_roles=True),
+                        source.Produce.name)
 
 if __name__ == '__main__':
     main()

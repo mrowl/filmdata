@@ -17,46 +17,68 @@ MATCH_SCORE_THRESHOLD = .3
 
 re_alpha = re.compile('[^A-Za-z0-9\_]')
 fuzz = lambda s: re_alpha.sub('', normalize('NFD', s.lower()))
+match_iter = lambda m: [ (k, v) for k, v in m.items() if k != 'id' and v ]
 
 class Match:
 
-    def __init__(self):
+    def __init__(self, type='title'):
+        self._type = type
         self._primary_name = config.core.primary_title_source
+        self._aux_names = [ n for n in config.sources if
+                            n != self._primary_name ]
+
         self._females = {}
         self._matches_og = {}
         self._matches_source = { self._primary_name : {} }
         self._new_matches = {}
         self._indexes = {}
 
-    def produce_titles(self, do_all=True):
+    def produce(self, status=None):
+        if self._type == 'title':
+            return self.produce_titles(status)
+        elif self._type == 'person':
+            return self.produce_persons(status)
+
+    def produce_titles(self, title_status=None):
         self._build_og()
         self._build_primary()
-        if do_all:
-            status = ('all',)
-        else:
-            status = ('new', 'updated', None)
-        for source in [ s for s in config.sources if s != self._primary_name ]:
-            for title in filmdata.sink.get_titles_for_matching(source, status):
+        for source in self._aux_names:
+            for title in self._get_things(source, title_status):
                 match_ids = self._find_matches(title)
                 if not match_ids:
-                    #update the database to show it was unmatched
-                    filmdata.sink.mark_source_title_unmatched(source,
-                                                              title['id'])
+                    self._mark_unmatched(source, title['id'])
                 moved = self._get_moved_matches(title['id'], match_ids, source)
                 new = self._get_new_matches(title['id'], match_ids, source)
                 for match in new + moved:
-                    print '%s : %s' % (source, str(match_ids))
                     #this is now an "original match" since it's in the db
                     yield self._update_og_match(match)
 
+    def produce_persons(self, person_status=None):
+        self._build_og()
+        self._build_primary()
+        if 1 == 0:
+            yield { 'hort' : 'who' }
+
+    def _get_things(self, source, status):
+        if self._type == 'title':
+            return filmdata.sink.get_titles_for_matching(source, status)
+        if self._type == 'person':
+            return filmdata.sink.get_persons_for_matching(source, status)
+
+    def _get_thing(self, source, id):
+        if self._type == 'title':
+            return filmdata.sink.get_title_for_matching(source, id)
+        if self._type == 'person':
+            return filmdata.sink.get_person_for_matching(source, id)
+
     def _build_og(self):
-        map(self._update_og_match, filmdata.sink.get_matches(type='title'))
+        map(self._update_og_match, filmdata.sink.get_matches(type=self._type))
 
     def _update_og_match(self, match_in):
         # check for sources that used to be in this match
         match = self._update_og_removals(match_in)
         self._matches_og[match['id']] = match.copy()
-        for k, v in [ (k, v) for k, v in match.items() if k != 'id' ]:
+        for k, v in match_iter(match):
             if not k in self._matches_source:
                 self._matches_source[k] = {}
             if v in self._matches_source[k]:
@@ -70,60 +92,55 @@ class Match:
         if not match['id'] in self._matches_og:
             return match
         new_match = match.copy()
-        for prev_name, prev_id in self._matches_og[match['id']].items():
-            if prev_name == 'id':
-                continue
+        for prev_name, prev_id in match_iter(self._matches_og[match['id']]):
             if not prev_name in match:
-                print 'we have a removal'
                 # remove this from the match_sources index
                 self._matches_source[prev_name][prev_id].remove(match['id'])
 
             if match.get(prev_name, prev_id) != prev_id:
                 # two source_ids for the same match_id, not allowed
-                print 'we have two source titles to one match title'
                 new_id = match[prev_name]
-                prev_title = filmdata.sink.get_title_for_matching(prev_name,
-                                                                  prev_id)
-                new_title = filmdata.sink.get_title_for_matching(prev_name,
-                                                                 new_id)
-                match_title = self._females[match['id']]
-                best_id, score = self._best_match(match_title,
-                                                  [prev_title, new_title])
-                # new title wins!
+                prev_thing = self._get_thing(prev_name, prev_id)
+                new_thing = self._get_thing(prev_name, new_id)
+                match_thing = self._females[match['id']]
+                best_id, score = self._best_match(match_thing,
+                                                  [prev_thing, new_thing])
+                # new thing wins!
                 if best_id == new_id:
-                    # remove the match for the prev title
+                    # remove the match for the prev thing
                     self._matches_source[prev_name][prev_id].remove(match['id'])
                 else:
                     # reset the match to it's old state
                     new_match[prev_name] = prev_id
 
-            # check if we've removed all of the matches for a source title
+            # check if we've removed all of the matches for a source thing
             if not self._matches_source[prev_name][prev_id]:
-                filmdata.sink.mark_source_title_unmatched(prev_name,
-                                                          prev_id)
+                self._mark_unmatched(prev_name, prev_id)
                 del self._matches_source[prev_name][prev_id]
         return new_match
 
+    def _mark_unmatched(self, source, id):
+        filmdata.sink.mark_source_title_unmatched(source, id)
+
     def _build_primary(self):
-        for title in filmdata.sink.get_titles_for_matching(self._primary_name,
-                                                           status=('all', )):
-            if not title['id'] in self._matches_source[self._primary_name]:
+        for thing in self._get_things(self._primary_name, status=('all', )):
+            if not thing['id'] in self._matches_source[self._primary_name]:
                 #default all matches to the primary source
                 #get a new id for this new title from the primary
-                match = { self._primary_name : title['id'] }
-                match_id = filmdata.sink.consume_match(match)
+                match = { self._primary_name : thing['id'] }
+                match_id = filmdata.sink.consume_match(match, self._type)
                 match['id'] = match_id
                 self._update_og_match(match)
-            elif len(self._matches_source[self._primary_name][title['id']]) > 1:
+            elif len(self._matches_source[self._primary_name][thing['id']]) > 1:
                 raise Exception('Primary id maps to multiple match ids')
             else:
                 match_id = list(
-                    self._matches_source[self._primary_name][title['id']])[0]
+                    self._matches_source[self._primary_name][thing['id']])[0]
 
             #TODO: make a title merger here for the matcher
-            merged_title = title.copy()
-            merged_title['id'] = match_id
-            self._females[match_id] = merged_title
+            merged_thing = thing.copy()
+            merged_thing['id'] = match_id
+            self._females[match_id] = merged_thing
 
     def _get_moved_matches(self, title_id, match_ids, source):
         if (not source in self._matches_source or
