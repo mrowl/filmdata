@@ -308,9 +308,9 @@ class CatalogTitle:
 
         art = {
             'small' : box_art.find('./link[@rel="http://schemas.netflix.com'
-                                   '/catalog/titles/box_art/150pix_w"]'),
+                                   '/catalog/titles/box_art/64pix_w"]'),
             'large' : box_art.find('./link[@rel="http://schemas.netflix.com'
-                                   '/catalog/titles/box_art/284pix_w"]'),
+                                   '/catalog/titles/box_art/150pix_w"]'),
         }
         for key, node in art.items():
             if node != None:

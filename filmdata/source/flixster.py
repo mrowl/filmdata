@@ -1,21 +1,22 @@
 import os
-from decimal import Decimal
 import logging
 import urllib
 import json
-import itertools
-from collections import defaultdict
+from itertools import imap, islice, dropwhile, ifilter
+from decimal import Decimal
+from operator import itemgetter
 
 from twisted.web.client import reactor, defer, getPage
 
-from filmdata import config
 import filmdata
+from filmdata.lib.util import dson
+from filmdata import config
 
 log = logging.getLogger(__name__)
 
 def take(n, iterable):
     "Return first n items of the iterable as a list"
-    return list(itertools.islice(iterable, n))
+    return list(islice(iterable, n))
 
 class Fetch:
 
@@ -32,31 +33,26 @@ class Fetch:
 
     @classmethod
     def fetch_info(cls):
-        load_tmp_titles = lambda: map(json.loads, [ l.strip() for l in
-                                                    open(config.flixster.titles_tmp_path) ])
+        def dump_titles():
+            dson.dump(dict([ (i['id'], i) for i in
+                             cls._get_fetched_info() ]),
+                      config.flixster.titles_path)
+            print 'dumped titles to %s' % config.flixster.titles_path
+
         def finish(results, last):
             reactor.stop()
-            fetched_titles = load_tmp_titles()
-            if os.path.exists(config.flixster.titles_path):
-                titles = json.load(open(config.flixster.titles_path))
-            else:
-                titles = {}
-            for title in fetched_titles:
-                titles[title['id']] = title
-            json.dump(titles, open(config.flixster.titles_path, 'w'))
-            os.remove(config.flixster.titles_tmp_path)
-            print 'ended at %s' % str(last)
+            dump_titles()
 
         def fetch_set(urls, last=None):
 
             def handler(body):
                 print 'in handler'
                 title = json.loads(body.strip())
-                if 'id' in title:
-                    title_jsoned = json.dumps(title)
-                    f = open(config.flixster.titles_tmp_path, 'a')
-                    f.write(title_jsoned + '\n')
-                    f.close()
+                # make sure it's legit (need the title for later
+                # to test if fetched
+                if title.get('id') and title.get('title'):
+                    title['id'] = int(title['id'])
+                    filmdata.sink.store_source_fetch('flixster_title', title)
                 return True
 
             deferreds = []
@@ -67,24 +63,17 @@ class Fetch:
                 dl.addCallback(finish, last)
             return dl
 
-        fetched_titles = []
-        fetched_title_ids = []
-        if os.path.exists(config.flixster.titles_tmp_path):
-            fetched_titles = load_tmp_titles()
-            fetched_title_ids = [ int(title['id']) for title in fetched_titles ]
+        unfetched_title_ids = map(itemgetter('id'),
+                                  filter(lambda t: t.get('title') is None,
+                                         cls._get_fetched_info(type='title')))
+        if len(unfetched_title_ids) == 0:
+            print 'no ids left for which to fetch titles'
+            dump_titles()
+            return
 
-        if os.path.exists(config.flixster.titles_path):
-            fetched_title_ids += [ int(k) for k in 
-                json.load(open(config.flixster.titles_path)).keys() ]
-
-        available_ids = json.load(open(config.flixster.ids_path))
-        unfetched_title_ids = list(set(available_ids) - set(fetched_title_ids))
         unfetched_title_ids.sort()
-
         if len(unfetched_title_ids) > cls._max_requests:
             ids_to_fetch = unfetched_title_ids[:cls._max_requests]
-        elif len(unfetched_title_ids) == 0:
-            return
         else:
             ids_to_fetch = unfetched_title_ids
 
@@ -94,14 +83,28 @@ class Fetch:
         i = 0
         print 'starting at %s' % str(ids_to_fetch[0])
         id_iter = iter(ids_to_fetch)
-        while i < cls._max_requests:
+        while i < len(ids_to_fetch):
             delay = 1.3*i/cls._max_threads
             i += cls._max_threads
             id_set = take(cls._max_threads, id_iter)
             url_set = map(url_maker, id_set)
-            last = id_set[-1] if i >= cls._max_requests else None
+            last = id_set[-1] if i > len(ids_to_fetch) else None
             reactor.callLater(delay, fetch_set, url_set, last=last)
         reactor.run()
+
+    @classmethod
+    def _get_fetched_info(cls, type='title'):
+        return filmdata.sink.get_source_fetch('flixster_title')
+
+    @classmethod
+    def _get_known_ids(cls, type='title'):
+        return map(itemgetter('id'),
+                   filmdata.sink.get_source_fetch('flixster_%s' % type,
+                                                  ids_only=True))
+
+    @classmethod
+    def _get_logged_searches(cls, type='title'):
+        return filmdata.sink.get_source_fetch('flixster_%s_search_log' % type)
 
     @classmethod
     def fetch_ids(cls, title_types=None, id_types=None):
@@ -114,54 +117,50 @@ class Fetch:
 
         url_maker = lambda args: '?'.join((config.flixster.title_search_url,
                                            urllib.urlencode(args)))
-        ids = []
-        
-        def store_ids(results, last):
+
+        known_ids = set(cls._get_known_ids())
+
+        def dump_ids(results, last):
             reactor.stop()
-            prev_set = json.load(open(config.flixster.ids_path))
-            ids.extend(prev_set)
-            uniques = list(set(ids))
-            uniques.sort()
-            #flatter = [ id for sub_k, sub_v in id_lists for k, id in sub_v ]
-            
-            json.dump(uniques, open(config.flixster.ids_path, 'w'))
-            print 'Dumped %d ids' % len(uniques)
-            json.dump(last, open(config.flixster.last_id_query_path, 'w'))
-            print 'ended at %s' % str(last)
+            json.dump(cls._get_known_ids(),
+                      open(config.flixster.title_ids_path, 'w'))
+            print 'dumped ids to %s' % config.flixster.title_ids_path
 
-        def fetch_set(urls, last=None):
+        def fetch_set(urls, titles, last=None):
 
-            def handler(body):
+            def handler(body, title):
                 print 'in handler'
                 resp = json.loads(body.strip())
-                for movie in resp['movies']:
-                    ids.append(int(movie['id']))
+                for id in [ int(m['id']) for m in resp['movies'] if
+                            int(m['id']) not in known_ids ]:
+                    filmdata.sink.store_source_fetch('flixster_title', { 'id' : id })
+                filmdata.sink.store_source_fetch('flixster_title_search_log',
+                                                 { 'id' : title['id'],
+                                                   'name' : title['name'], })
                 return True
 
             deferreds = []
-            for url in urls:
-                deferreds.append(getPage(url).addCallback(handler))
+            for i, url in enumerate(urls):
+                deferreds.append(getPage(url).addCallback(handler, titles[i]))
             dl = defer.DeferredList(deferreds)
             if last is not None:
-                dl.addCallback(store_ids, last)
+                dl.addCallback(dump_ids, last)
             return dl
 
+        searched_primary_ids = set(map(itemgetter('id'),
+                                       cls._get_logged_searches()))
+        unsearched_test = lambda t: t['id'] not in searched_primary_ids
+        titles = filmdata.sink.get_source_titles(config.core.primary_title_source)
+        title_iter = ifilter(unsearched_test, titles)
 
-        titles = filmdata.sink.get_source_titles('netflix')
-        if os.path.exists(config.flixster.last_id_query_path):
-            last_query = json.load(open(config.flixster.last_id_query_path))
-            print 'starting at %s' % str(last_query)
-            title_iter = itertools.dropwhile(lambda t: t['key'] != last_query, titles)
-        else:
-            title_iter = titles
         i = 0
-        while i < cls._max_requests:
+        while title_iter and i < cls._max_requests:
             delay = 1.3*i/cls._max_threads
             i += cls._max_threads
             title_set = take(cls._max_threads, title_iter)
             url_set = map(url_maker, map(arg_maker, title_set))
-            last = title_set[-1]['key'] if i >= cls._max_requests else None
-            reactor.callLater(delay, fetch_set, url_set, last=last)
+            last = title_set[-1]['id'] if not title_iter or i >= cls._max_requests else None
+            reactor.callLater(delay, fetch_set, url_set, title_set, last=last)
         reactor.run()
 
 class Produce:
@@ -174,14 +173,13 @@ class Produce:
 
     @classmethod
     def produce_titles(cls, types):
-        flix_titles = json.load(open(config.flixster.titles_path))
-        for flix_id, flix_title in flix_titles.iteritems():
-            if not flix_title.get('title'):
-                continue
-            if not flix_title.get('year'):
+        
+        flix_titles = Fetch._get_fetched_info(type='title')
+        for flix_title in flix_titles:
+            if not flix_title.get('title') or not flix_title.get('year'):
                 continue
             yield {
-                'id' : flix_title['id'],
+                'id' : int(flix_title['id']),
                 'alternate' : cls._get_alternate(flix_title.get('alternate_ids')),
                 'name' : flix_title.get('title'),
                 'year' : flix_title.get('year'),

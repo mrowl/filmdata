@@ -1,14 +1,16 @@
 import logging
-import itertools
 import re
 import os
 import decimal
 import hashlib
+from HTMLParser import HTMLParser
 from operator import itemgetter
 from urllib import quote_plus
 from functools import partial
+from itertools import imap, ifilter
 
-from filmdata.lib.util import dson, rname, clean_name, class_property, extract_name_suffix
+from filmdata.lib.util import dson, rname, clean_name
+from filmdata.lib.util import class_property, extract_name_suffix
 from filmdata import config
 from filmdata.lib.util import base_encode
 from filmdata.lib.scrape import Scrape
@@ -46,15 +48,14 @@ class ImdbMixin:
 
 class Fetch(ImdbMixin):
 
-    _id_data = {}
     _re_html_title_id = re.compile('<p><b>Titles (Exact Matches)</b>\s+'
                                    '(Displaying [0-9]+ Results?)<table><tr>\s+'
                                    '<td valign="top">'
                                    '<a href="/title/tt([0-9]+)/"')
-    _popular_id_string = '^\s*<p><b>Popular Names</b>.*?<br><a href="/name/nm([0-9]+)/" onclick=".*?">%s</a>\s*<small>'
-    _partial_id_string = '<a href="/name/nm([0-9]+)/" onclick="[^"]+">%s</a>\s*(:?%s)?\s*<small>'
-    _re_uri_id = re.compile('^http://www.imdb.com/(title|name)/(nm|tt)([0-9]+)/')
-    _client = None
+    #_popular_id_string = '^\s*<p><b>Popular Names</b>.*?<br><a href="/name/nm([0-9]+)/" onclick="[^"]">%s</a>\s*<small>'
+    #_partial_id_string = '<a href="/name/nm([0-9]+)/" onclick="[^"]+">%s</a>\s*(:?%s)?\s*<small>'
+    _person_id_string = '<a href="/name/nm([0-9]+)/" onclick="[^"]+">%s</a>\s*%s<small>'
+    _re_uri_id = re.compile('^http://www.imdb.com/(title|name)/(nm|tt)([0-9]+)/?')
 
     @classmethod
     def fetch_data(cls):
@@ -66,10 +67,11 @@ class Fetch(ImdbMixin):
         for role in cls._role_types:
             cls._fetch(role)
         for thing_type in ('title', 'person'):
-            cls._fetch_ids(cls._title_types, thing_type)
+            cls.fetch_ids(cls._title_types, thing_type)
 
     @classmethod
     def fetch_ids(cls, title_types, type='title'):
+        cls._type = type
         if type == 'title':
             url_source = cls._get_title_urls
         else:
@@ -82,45 +84,50 @@ class Fetch(ImdbMixin):
     @classmethod
     def _fetch_id_response(cls, resp, resp_url=None):
         id = None
-        type = 'person' if 's=nm' in resp_url[1] else 'title'
+        ident = resp_url[0]
+        if resp_url[1] != resp.effective_url:
+            log.warning('Fetched url and effective url do not match')
+            log.warning('%s  ;  %s' % (str(resp_url), resp.effective_url))
+            return None
+
         if resp is None:
             log.info('Starting thread')
         elif resp.error and getattr(resp.error, 'code', 999) < 400:
-            uri = resp.error.response.headers['Location']
+            uri = resp.headers['Location']
             uri_id_match = cls._re_uri_id.match(uri)
             if uri_id_match:
                 id = int(uri_id_match.group(3))
-                print 'uri matched %s %s to %s' % (type, resp_url[0],
-                                                      str(id))
+                print 'uri matched %s %s to %s' % (cls._type, ident, str(id))
             else:
                 print 'redirect with no uri id match: %s' % uri
         elif resp.error:
             log.error("Scraper error:" % str(resp.error))
-        elif type == 'person':
-            re_popular_id = re.compile(cls._popular_id_string %
-                                       rname(clean_name(resp_url[0])),
-                                       re.I)
-            suffix = extract_name_suffix(resp_url[0])
-            if suffix:
-                suffix = suffix.replace('(', '\(', 1).replace(')', '\)', 1)
-            re_partial_id = re.compile(cls._partial_id_string %
-                                       (rname(clean_name(resp_url[0])),
-                                        suffix), re.I)
-            for line in resp.buffer:
-                html_id_match = re_popular_id.match(line)
-                if not html_id_match:
-                    html_id_match = re_partial_id.search(line)
-                if html_id_match:
-                    id = int(html_id_match.group(1))
-                    print 'html matched %s %s to %s' % (type, resp_url[0],
-                                                        str(id))
-                    break
+        elif cls._type == 'person':
+            id = cls._extract_id_from_html(resp.buffer, ident)
+            if id:
+                print 'html matched %s %s to %s' % (cls._type, ident, str(id))
             else:
-                print 'No match for %s %s' % (type, resp_url[0])
+                print 'no match for %s %s' % (cls._type, ident)
         if id:
-            id_data = { 'ident' : resp_url[0] }
+            id_data = { 'ident' : ident }
             filmdata.sink.store_source_data('imdb', data=id_data,
-                                            id=id, suffix=type)
+                                            id=id, suffix=cls._type)
+    
+    @classmethod
+    def _extract_id_from_html(cls, lines, ident):
+        h = HTMLParser()
+        suffix = extract_name_suffix(ident)
+        if suffix:
+            suffix = suffix.replace('(', '\(', 1).replace(')', '\)', 1)
+            suffix = '(:?%s)?\s*' % suffix
+        person_id_string = cls._person_id_string % (rname(clean_name(ident)),
+                                                    suffix) 
+        re_person_id = re.compile(person_id_string, re.I)
+        for line in imap(h.unescape, lines):
+            id_match = re_person_id.search(line)
+            if id_match:
+                return int(id_match.group(1))
+        return None
 
     @classmethod
     def _scrape_response(cls, type='title'):
@@ -129,12 +136,12 @@ class Fetch(ImdbMixin):
 
     @classmethod
     def _get_title_urls(cls, title_types, only_new=True):
-        iterator = itertools.imap(lambda i: (i, Produce._title_href(None, ident=i)),
+        iterator = imap(lambda i: (i, Produce._title_href(None, ident=i)),
                                   Produce.produce_title_stats(title_types,
                                                       idents_only=True))
         if only_new:
             known_ids = cls._get_known_ids('title')
-            return itertools.ifilter(lambda u: u[0] not in known_ids,
+            return ifilter(lambda u: u[0] not in known_ids,
                                      iterator)
         return iterator
 
@@ -152,7 +159,7 @@ class Fetch(ImdbMixin):
 
         if only_new:
             known_ids = cls._get_known_ids('person')
-            return itertools.ifilter(lambda u: u[0] not in known_ids, gen())
+            return ifilter(lambda u: u[0] not in known_ids, gen())
 
         return gen()
 
@@ -280,7 +287,7 @@ class Produce(ImdbMixin):
 
         person_new = lambda: { 'name' : None, 'id' : None, 'roles' : [] }
         person_ident, person = None, person_new()
-        for line in itertools.imap(lambda l: l.strip().decode('latin_1'), f):
+        for line in imap(lambda l: l.strip().decode('latin_1'), f):
             if line[:9] == '---------':
                 log.info('End of File, done importing %s' % role_type)
                 break

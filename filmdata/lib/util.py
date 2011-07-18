@@ -35,7 +35,8 @@ def base_decode(number, base=36):
 
 def rname(n):
     a = n.split(',')
-    return ' '.join(a[1:]).partition('(')[0].strip() + ' ' + a[0]
+    b = ' '.join(a[1:]).partition('(')[0].strip() + ' ' + a[0]
+    return b.strip()
 
 clean_name = lambda x: re.sub('\(.*?\)', '', x)
 
