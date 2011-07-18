@@ -49,10 +49,10 @@ class Scrape(object):
             uri = url
         kwargs = self._timeout
         kwargs.update(self._proxy)
-        self._client.fetch(str(uri),
-                           partial(self._fetch_callback,
-                                   url=url, retry_count=count),
-                           follow_redirects=False, headers=self._headers,
+        callback = partial(self._fetch_callback, url=url, retry_count=count)
+        self._client.fetch(str(uri), callback,
+                           follow_redirects=self._follow_redirects,
+                           headers=self._headers,
                            **kwargs)
 
     def _wrap_callback(self, func):
