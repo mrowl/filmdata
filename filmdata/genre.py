@@ -59,6 +59,7 @@ class Genres:
         'black comedies' : 'black comedy',
         'thrillers' : 'thriller',
         'music & musicals' : 'musical',
+        'contemporary movie musicals' : 'musical',
         'musicals' : 'musical',
         'romantic' : 'romance',
         'classics' : 'classic',
@@ -66,6 +67,7 @@ class Genres:
         'classical music' : 'classical',
         'documentaries' : 'documentary',
         'historical' : 'history',
+        'blockbusters' : 'blockbuster',
         'biographical' : 'biography',
         'biographies' : 'biography',
         'sports' : 'sport',
@@ -86,6 +88,7 @@ class Genres:
         'mystery & suspense' : ('mystery', 'suspense'),
         'suspense & thriller' : ('thriller', 'suspense'),
         'military & war' : ('military', 'war'),
+        'musical & performing arts' : ('musical', 'performing arts'),
     }
 
     _ignored = frozenset((
