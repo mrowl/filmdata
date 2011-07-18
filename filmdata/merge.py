@@ -18,7 +18,7 @@ TITLE_SCHEMA = {
     'mpaa' : ('imdb', 'netflix', 'flixster'),
     'year' : ('netflix', 'imdb', 'flixster'),
     'name' : ('imdb', 'netflix', 'flixster'),
-    'art' : ('netflix',),
+    'art' : ('netflix', 'flixster'),
     'type' : ('imdb', 'netflix', 'flixster'),
     'availability' : ('netflix',),
     'runtime' : ('imdb', 'netflix', 'flixster'),
@@ -37,6 +37,13 @@ PERSON_SCHEMA = {
     'name' : ('imdb', 'netflix', 'flixster'),
 }
 
+RATING_WEIGHTS = {
+    'imdb' : 35,
+    'netflix' : 25,
+    'flixster' : 25,
+    'rt' : 15,
+}
+
 class Merge:
 
     def __init__(self, type='title'):
@@ -47,8 +54,11 @@ class Merge:
     @property
     def person_ids(self):
         if not hasattr(self, '_person_ids'):
-            self._person_ids = dict([ (p['alternate'][self._primary_person_source], p['id'])
-                                       for p in filmdata.sink.get_persons() ])
+            self._person_ids = dict([ (p[self._primary_person_source], p['id'])
+                                       for p in
+                                       filmdata.sink.get_matches(type='person',
+                                                                 status=('all',
+                                                                        )) ])
         return self._person_ids
 
     def produce(self, match_status=None):
@@ -80,7 +90,10 @@ class Merge:
             },
             'name' : primary_person['name'],
             'href' : primary_person['href'],
+            'roles' : {},
         }
+        for group in config.role_groups:
+            person['roles'][group] = filmdata.sink.get_person_titles_by_role_group(id, group)
         return person
 
     def _merge_source_titles(self, id, **source_titles):
@@ -90,9 +103,17 @@ class Merge:
             if title_key == 'alternate':
                 title[title_key] = dict([ (k, v['id']) for k, v in
                                           source_titles.items() ])
+            elif title_key == 'href':
+                title[title_key] = dict([ (k, v[title_key]) for k, v in
+                                          source_titles.items() if
+                                          title_key in v and k != 'flixster' ])
+                if 'flixster' in source_titles:
+                    title[title_key]['rt'] = source_titles['flixster'].get('href')
             elif merger in ('append', 'append_plural'):
                 title[title_key] = dict([ (k, v[title_key]) for k, v in
                                           source_titles.items() if title_key in v])
+                if title_key == 'rating':
+                    title[title_key]['filmdata'] = self._get_filmdata_rating(title[title_key])
                 if merger == 'append_plural':
                     plural_key = title_key + 's'
                     for source_name, source_title in source_titles.items():
@@ -135,17 +156,30 @@ class Merge:
 
         return title
 
+    def _get_filmdata_rating(self, source_ratings):
+        source_mean_sum = 0
+        weight_total = 0
+        for source_name, source_mean in [ (k, v['mean']) for k, v in
+                                          source_ratings.items() if
+                                          v.get('mean') ]:
+            source_mean_sum += RATING_WEIGHTS[source_name] * source_mean
+            weight_total += RATING_WEIGHTS[source_name]
+        filmdata_mean = float(source_mean_sum) / weight_total
+        return { 'mean' : filmdata_mean }
+
     def _pick_aka_name(self, aka):
         if aka:
-            us_name = [ a['name'] for a in aka if
-                        a['region'] == 'USA' and
-                        self._aka_note_filter(a.get('note')) ]
-            if us_name:
-                return us_name[0]
+            for a in aka:
+                if a['region'] == 'USA' and self._aka_note_filter(a.get('note')):
+                    return a['name']
+            for a in aka:
+                if (a['region'] == 'International: English title' and
+                    self._aka_note_filter(a.get('note'))):
+                    return a['name']
         return None
     
     def _aka_note_filter(self, note):
-        if not note:
+        if not note or note == 'imdb display title':
             return True
         else:
             return False
@@ -174,4 +208,3 @@ class Merge:
                 member['person_id'] = self.person_ids[person['person_id']]
             merged_persons.append(member)
         return sorted(merged_persons, key=itemgetter('billing'))
-
