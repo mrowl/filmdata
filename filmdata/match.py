@@ -72,7 +72,8 @@ class Match:
             return filmdata.sink.get_person_for_matching(source, id)
 
     def _build_og(self):
-        map(self._update_og_match, filmdata.sink.get_matches(type=self._type))
+        map(self._update_og_match,
+            filmdata.sink.get_matches(type=self._type, status=('all', )))
 
     def _update_og_match(self, match_in):
         # check for sources that used to be in this match

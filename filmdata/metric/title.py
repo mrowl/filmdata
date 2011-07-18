@@ -50,7 +50,6 @@ class TitleMetric(Metric):
                            self._min_votes[name], report_mean)
         return dict([ (d['id'], d) for d in data ])
 
-
     def _get_average_index(self, indexes):
         averages = {}
         for id in self._titles.keys():

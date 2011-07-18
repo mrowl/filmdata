@@ -24,9 +24,9 @@ class Metric:
             'imdb' : 3500,
             'netflix' : 10000,
         }
-        self._count_sources = ('imdb', 'netflix')
+        self._count_sources = config.vote_sources
         self._sink = filmdata.sink
-        self._sources = config.core.active_sources.split()
+        self._sources = config.sources
         self._cull_source = config.core.primary_data
 
     def __call__(self):

@@ -67,19 +67,30 @@ class MongoSink:
         self.ensure_indexes()
 
     def ensure_indexes(self):
+        primary_thing_index = { 'alternate.imdb' : pmongo.ASCENDING }
         base_thing_index = {
-            'alternate.imdb' : pmongo.ASCENDING,
             'alternate.netflix' : pmongo.ASCENDING,
             'alternate.flixster' : pmongo.ASCENDING,
         }
         self.m.title.ensure_index(base_thing_index.items())
         self.m.person.ensure_index(base_thing_index.items())
+        self.m.title.ensure_index(primary_thing_index.items(), unique=True)
+        self.m.person.ensure_index(primary_thing_index.items(), unique=True)
+
+        self.m.imdb_data_person.ensure_index([('ident', pmongo.ASCENDING)],
+                                             unique=True)
+
+        primary_match_index = { 'imdb' : pmongo.ASCENDING }
         base_match_index = {
-            'imdb' : pmongo.ASCENDING,
             'netflix' : pmongo.ASCENDING,
             'flixster' : pmongo.ASCENDING,
         }
+        self.m.title_match.ensure_index(primary_match_index.items(),
+                                        unique=True)
         self.m.title_match.ensure_index(base_match_index.items())
+        self.m.person_match.ensure_index(primary_match_index.items(),
+                                        unique=True)
+        self.m.person_match.ensure_index(base_match_index.items())
         for group in self._role_groups:
             self.m.title.ensure_index([('.'.join((group, 'person_id')),
                                         pmongo.ASCENDING)])
@@ -130,6 +141,21 @@ class MongoSink:
             collection = '_'.join((collection, suffix))
         self.m[collection].drop()
 
+    def get_source_fetch(self, name, ids_only=False):
+        collection = '%s_fetch' % name
+        if ids_only:
+            cursor = self.m[collection].find(fields={ '_id' : 1 })
+        else:
+            cursor = self.m[collection].find()
+        return imap(self._clean, cursor)
+
+    def store_source_fetch(self, name, data, timestamps=True):
+        collection = '%s_fetch' % name
+        doc = self._clean(data)
+        if timestamps:
+            doc.update(self._get_timestamps())
+        self.m[collection].update({ '_id' : doc['_id'] }, doc, upsert=True,
+                                  multi=False)
 
     def _get_timestamps(self, created=True):
         now = datetime.now()
@@ -308,8 +334,7 @@ class MongoSink:
         return imap(self._clean, self.m.title.find())
 
     def get_title_ratings(self):
-        return imap(self._clean,
-                              self.m.title.find(fields={'rating' : 1}))
+        return imap(self._clean, self.m.title.find(fields={'rating' : 1}))
     
     def consume_source_persons(self, producer, source_name):
         start = time.time()
@@ -352,6 +377,22 @@ class MongoSink:
                     titles.sort(key=itemgetter('year'))
                     yield (person_id, group), titles
     
+    def get_person_titles_by_role_group(self, id, group):
+        group_key = '.'.join((group, 'person_id'))
+        fields = { '_id' : 1, 'year' : 1, 'rating' : 1, group : 1 }
+        titles = []
+        for title in self.m.title.find({ group_key : id }, fields=fields):
+            for member in title[group]:
+                if member.get('person_id') == id:
+                    titles.append({
+                        'title_id' : title['_id'],
+                        #'rating' : title['rating'],
+                        #'year' : title['year'],
+                        'billing' : member.get('billing'),
+                        'character' : member.get('character'),
+                    })
+        return titles
+
     def get_persons(self):
         return imap(self._clean, self.m.person.find())
 
@@ -377,6 +418,10 @@ class MongoSink:
     def _clean(self, thing, key='id'):
         if '_admin' in thing:
             del thing['_admin']
+        if 'modified' in thing:
+            del thing['modified']
+        if 'created' in thing:
+            del thing['created']
         if '_id' in thing and not key in thing:
             thing[key] = thing['_id']
             del thing['_id']
