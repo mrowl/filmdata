@@ -89,11 +89,16 @@ class Merge:
                 primary_name : primary_person['id'],
             },
             'name' : primary_person['name'],
-            'href' : primary_person['href'],
+            'href' : {
+                primary_name : primary_person['href'],
+            },
             'roles' : {},
+            'power' : 0,
         }
         for group in config.role_groups:
             person['roles'][group] = filmdata.sink.get_person_titles_by_role_group(id, group)
+        for group, roles in person['roles'].iteritems():
+            person['power'] += sum(map(itemgetter('role_power'), roles))
         return person
 
     def _merge_source_titles(self, id, **source_titles):
@@ -164,7 +169,7 @@ class Merge:
                                           v.get('mean') ]:
             source_mean_sum += RATING_WEIGHTS[source_name] * source_mean
             weight_total += RATING_WEIGHTS[source_name]
-        filmdata_mean = float(source_mean_sum) / weight_total
+        filmdata_mean = round(float(source_mean_sum) / weight_total, 1)
         return { 'mean' : filmdata_mean }
 
     def _pick_aka_name(self, aka):

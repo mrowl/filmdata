@@ -379,19 +379,26 @@ class MongoSink:
     
     def get_person_titles_by_role_group(self, id, group):
         group_key = '.'.join((group, 'person_id'))
-        fields = { '_id' : 1, 'year' : 1, 'rating' : 1, group : 1 }
+        fields = { '_id' : 1, 'name' : 1, 'year' : 1, 'rating' : 1, group : 1 }
         titles = []
         for title in self.m.title.find({ group_key : id }, fields=fields):
+            votes = title['rating'][config.core.primary_data].get('count', 0)
+            rating = title['rating'][config.core.primary_data].get('mean', 0)
+            year_diff = abs(datetime.now().year - title['year'] + 3)
             for member in title[group]:
                 if member.get('person_id') == id:
+                    billing_num = member.get('billing') or 999
                     titles.append({
                         'title_id' : title['_id'],
+                        'role_power' : round(float(votes * rating) /
+                                             (year_diff * billing_num), 1),
                         #'rating' : title['rating'],
                         #'year' : title['year'],
+                        'name' : title['name'],
                         'billing' : member.get('billing'),
                         'character' : member.get('character'),
                     })
-        return titles
+        return sorted(titles, key=itemgetter('role_power'), reverse=True)
 
     def get_persons(self):
         return imap(self._clean, self.m.person.find())
