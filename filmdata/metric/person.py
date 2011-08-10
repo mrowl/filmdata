@@ -20,7 +20,7 @@ class PersonMetric(Metric):
     def __init__(self):
         Metric.__init__(self)
         self._min_votes = {
-            'imdb' : 1000,
+            'imdb' : 2000,
             'netflix' : 20000,
         }
         self._min_titles = {
@@ -33,6 +33,7 @@ class PersonMetric(Metric):
             'cast' : 8,
             'writer' : 2,
         }
+        self._min_runtime = 60
         self._cull_min = self._min_votes[self._cull_source]
 
     def __call__(self):
@@ -118,6 +119,8 @@ class PersonMetric(Metric):
         if not title.get('rating'):
             return False
         if not title['rating'].get(self._cull_source):
+            return False
+        if not title.get('runtime', 0) >= self._min_runtime:
             return False
         rating = title['rating'].get(self._cull_source)
         if rating[self._count_field] < self._cull_min:

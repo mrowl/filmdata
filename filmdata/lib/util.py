@@ -1,6 +1,7 @@
 import string
 import re
 import json
+from itertools import islice
 ALPHA_36 = ''.join((string.digits, string.ascii_lowercase))
 ALPHA_62 = ''.join((ALPHA_36, string.ascii_uppercase))
 
@@ -70,3 +71,7 @@ class dson:
 class class_property(property):
     def __get__(self, cls, owner):
         return self.fget.__get__(None, owner)()
+
+def take(n, iterable):
+    "Return first n items of the iterable as a list"
+    return list(islice(iterable, n))

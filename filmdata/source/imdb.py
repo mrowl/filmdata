@@ -77,9 +77,10 @@ class Fetch(ImdbMixin):
         else:
             url_source = cls._get_person_urls
         scraper = Scrape(url_source(title_types), cls._fetch_id_response,
-                         scrape_callback=partial(cls._scrape_response, type=type),
-                         follow_redirects=False, max_clients=12, anon=True)
+                         follow_redirects=False, max_clients=8,
+                         delay=1, anon=True)
         scraper.run()
+        cls._scrape_response(type=type)
     
     @classmethod
     def _fetch_id_response(cls, resp, resp_url=None):
@@ -90,18 +91,16 @@ class Fetch(ImdbMixin):
             log.warning('%s  ;  %s' % (str(resp_url), resp.effective_url))
             return None
 
-        if resp is None:
-            log.info('Starting thread')
-        elif resp.error and getattr(resp.error, 'code', 999) < 400:
-            uri = resp.headers['Location']
+        if resp.status >= 300 and resp.status < 400:
+            uri = resp.location
             uri_id_match = cls._re_uri_id.match(uri)
             if uri_id_match:
                 id = int(uri_id_match.group(3))
                 print 'uri matched %s %s to %s' % (cls._type, ident, str(id))
             else:
                 print 'redirect with no uri id match: %s' % uri
-        elif resp.error:
-            log.error("Scraper error:" % str(resp.error))
+        elif resp.status >= 400:
+            log.error("Scraper error:" % str(resp))
         elif cls._type == 'person':
             id = cls._extract_id_from_html(resp.buffer, ident)
             if id:
