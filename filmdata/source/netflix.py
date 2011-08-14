@@ -2,11 +2,8 @@ import logging, re, HTMLParser, os, string
 from datetime import datetime
 from decimal import Decimal
 import oauth2 as oauth
-from functools import partial
 from cookielib import MozillaCookieJar
-from Cookie import SimpleCookie
 import xml.etree.cElementTree as etree
-import json
 
 from filmdata.lib.util import dson
 import filmdata.sink
@@ -81,9 +78,10 @@ class NetflixMixin:
 
     @classmethod
     def _load_votes(cls):
-        if os.path.exists(config.netflix.votes_path):
-            return dson.load(config.netflix.votes_path)
-        return {}
+        votes = {}
+        for title in filmdata.sink.get_source_data('netflix', 'title'):
+            votes[title['id']] = title['votes']
+        return votes
 
 class Fetch(NetflixMixin):
 
@@ -93,7 +91,7 @@ class Fetch(NetflixMixin):
     _consumer_secret = config.netflix.consumer_secret
     _titles_url = config.netflix.titles_url
     _title_url_base = config.netflix.title_url_base
-    _re_votes = re.compile('^\s+Average of ([0-9,]+) ratings:\s*$')
+    _re_votes = re.compile('\s+Average of ([0-9,]+) ratings:\s*')
     _votes = {}
 
     @classmethod
@@ -104,26 +102,23 @@ class Fetch(NetflixMixin):
     def fetch_votes(cls, fetch_existing=False):
         scraper = Scrape(cls._get_title_urls(fetch_existing),
                          cls._fetch_vote_response,
-                         scrape_callback=cls._scrape_response,
                          max_clients=50)
-        for hkey, hvalue in cls._get_cookie_headers():
-            scraper.add_header(hkey, hvalue)
+        #for hkey, hvalue in cls._get_cookie_headers():
+        scraper.add_header('Cookie', '; '.join(cls._get_cookie_headers()))
         scraper.run()
+        cls._scrape_response()
 
     @classmethod
     def _get_cookie_headers(cls):
         jar = MozillaCookieJar(config.netflix.cookies_path)
         jar.load()
+        cookies = []
         for line in jar:
-            cookie = SimpleCookie()
-            cookie[line.name] = line.value
-            for key in ('domain', 'expires', 'path'):
-                cookie[line.name][key] = getattr(line, key)
-            partitions = cookie.output().partition(' ') 
-            yield (partitions[0].replace('Set-', ''), partitions[2])
+            cookies.append('='.join((line.name, line.value)))
+        return cookies
 
     @classmethod
-    def _get_title_urls(cls, include_found=False):
+    def _get_title_urls(cls, include_found=True):
         votes = {}
         if not include_found:
             log.info("Loading up old ids/votes from file and excluding")
@@ -146,17 +141,16 @@ class Fetch(NetflixMixin):
     def _fetch_vote_response(cls, resp, resp_url=None):
         if resp is None:
             log.info('Starting thread')
-        elif resp.error:
-            log.error("Error: %s" % str(resp.error))
+        elif resp.status > 300:
+            log.error("Error: %s" % str(resp.status))
         else:
-            for line in resp.buffer:
-                votes_match = cls._re_votes.match(line)
-                if votes_match and votes_match.group(1):
-                    votes = int(votes_match.group(1).replace(',', ''))
-                    vote_data = { 'votes' : votes }
-                    filmdata.sink.store_source_data('netflix', data=vote_data,
-                                                    id=resp_url[0],
-                                                    suffix='title')
+            votes_match = cls._re_votes.search(resp.buffer)
+            if votes_match and votes_match.group(1):
+                votes = int(votes_match.group(1).replace(',', ''))
+                vote_data = { 'votes' : votes }
+                filmdata.sink.store_source_data('netflix', data=vote_data,
+                                                id=resp_url[0],
+                                                suffix='title')
     
     @classmethod
     def _scrape_response(cls):
@@ -248,10 +242,13 @@ class CatalogTitle:
 
     def _get_availability(self, node):
         format = node.find('./category[@scheme='
-                           '"http://api.netflix.com/categories/title_formats"]')
+                           '"http://api-nccp.netflix.com/categories/title_formats"]')
         if not format:
-            log.warn('No format info found')
-            return None
+            format = node.find('./category[@scheme='
+                               '"http://api.netflix.com/categories/title_formats"]')
+            if not format:
+                log.warn('No format info found')
+                return None
 
         avail = {
             'from' : node.get('available_from'),
@@ -262,7 +259,10 @@ class CatalogTitle:
                 avail[k] = datetime.fromtimestamp(int(avail[k]))
 
         quality = format.find('./category[@scheme='
-                              '"http://api.netflix.com/categories/title_formats/quality"]')
+                              '"http://api-nccp.netflix.com/categories/title_formats/quality"]')
+        if not quality:
+            quality = format.find('./category[@scheme='
+                                  '"http://api.netflix.com/categories/title_formats/quality"]')
         if quality != None and quality.get('label') == 'HD':
             avail['quality'] = 2
         else:

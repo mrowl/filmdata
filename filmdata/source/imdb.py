@@ -76,11 +76,12 @@ class Fetch(ImdbMixin):
             url_source = cls._get_title_urls
         else:
             url_source = cls._get_person_urls
+        #url_source = lambda t: iter([('Prowse, David', Produce._person_href(None, ident='Prowse, David'))])
         scraper = Scrape(url_source(title_types), cls._fetch_id_response,
                          follow_redirects=False, max_clients=8,
                          delay=1, anon=True)
         scraper.run()
-        cls._scrape_response(type=type)
+        #cls._scrape_response(type=type)
     
     @classmethod
     def _fetch_id_response(cls, resp, resp_url=None):
@@ -102,7 +103,7 @@ class Fetch(ImdbMixin):
         elif resp.status >= 400:
             log.error("Scraper error:" % str(resp))
         elif cls._type == 'person':
-            id = cls._extract_id_from_html(resp.buffer, ident)
+            id = cls._extract_id_from_html(resp.buffer.split("\n"), ident)
             if id:
                 print 'html matched %s %s to %s' % (cls._type, ident, str(id))
             else:

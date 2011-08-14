@@ -157,6 +157,15 @@ class MongoSink:
         self.m[collection].update({ '_id' : doc['_id'] }, doc, upsert=True,
                                   multi=False)
 
+    def update_source_fetch(self, name, id, key, value, timestamps=True):
+        collection = '%s_fetch' %name
+        doc = self._clean(value)
+        if timestamps:
+            doc.update(self._get_timestamps())
+        self.m[collection].update({ '_id' : doc['_id'] },
+                                  { '$set' : { key : value } },
+                                  upsert=False, multi=False)
+
     def _get_timestamps(self, created=True):
         now = datetime.now()
         timestamp = { 'modified' : now }
