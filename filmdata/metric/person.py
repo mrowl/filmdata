@@ -122,6 +122,7 @@ class PersonMetric(Metric):
             return False
         if not title.get('runtime', 0) >= self._min_runtime:
             return False
+        
         rating = title['rating'].get(self._cull_source)
         if rating[self._count_field] < self._cull_min:
             return False

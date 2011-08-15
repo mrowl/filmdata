@@ -118,10 +118,18 @@ def main():
             merge = filmdata.merge.Merge('title')
             filmdata.sink.consume_merged_titles(
                 merge.produce(match_status=status))
+            log.info('Done merging titles')
+            log.info('Started crunching titles')
+            crunch(None, 'title', None)
+            log.info('Finished crunching titles')
         elif options.op_person:
             merge = filmdata.merge.Merge('person')
             filmdata.sink.consume_merged_persons(
                 merge.produce(match_status=status))
+            log.info('Done merging persons')
+            log.info('Started crunching persons')
+            crunch(None, 'person', None)
+            log.info('Finished crunching persons')
 
     if options.fetches:
         for name in options.fetches.split(','):

@@ -393,8 +393,9 @@ class Produce:
         for flix_title in flix_titles:
             if not flix_title.get('title') or not flix_title.get('year'):
                 continue
+            id = int(flix_title['id'])
             yield {
-                'id' : int(flix_title['id']),
+                'id' : id,
                 'alternate' : cls._get_alternate(flix_title.get('alternate_ids')),
                 'name' : flix_title.get('title'),
                 'year' : flix_title.get('year'),
@@ -406,11 +407,19 @@ class Produce:
                     'rating' : flix_title.get('mpaa_rating'),
                 },
                 'consensus' : flix_title.get('critics_consensus'),
+                'review' : cls._get_reviews(id),
                 'ratings' : cls._get_ratings(flix_title.get('ratings')),
                 'cast' : cls._get_cast(flix_title.get('abridged_cast')),
                 'director' : cls._get_directors(flix_title.get('abridged_directors')),
                 'art' : cls._get_art(flix_title.get('posters')),
             }
+
+    @classmethod
+    def _get_reviews(cls, id):
+        title = filmdata.sink.get_source_fetch_by_id('flixster_review', id)
+        if not title:
+            return None
+        return title.get('reviews')
 
     @classmethod
     def _get_alternate(cls, alternate_ids):

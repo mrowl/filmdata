@@ -149,6 +149,13 @@ class MongoSink:
             cursor = self.m[collection].find()
         return imap(self._clean, cursor)
 
+    def get_source_fetch_by_id(self, name, id):
+        collection = '%s_fetch' % name
+        doc = self.m[collection].find_one({ '_id' : id })
+        if doc:
+            return self._clean(doc)
+        return None
+
     def store_source_fetch(self, name, data, timestamps=True):
         collection = '%s_fetch' % name
         doc = self._clean(data)
@@ -370,7 +377,7 @@ class MongoSink:
             for group in self._role_groups:
                 titles = []
                 group_key = '.'.join((group, 'person_id'))
-                title_fields = { 'year' : 1, 'rating' : 1,
+                title_fields = { 'year' : 1, 'rating' : 1, 'runtime' : 1,
                                   group : 1 }
                 for title in self.m.title.find({ group_key : person_id },
                                                fields=title_fields):
@@ -380,6 +387,7 @@ class MongoSink:
                                 'rating' : title['rating'],
                                 'year' : title['year'],
                                 'billing' : member.get('billing'),
+                                'runtime' : title.get('runtime', 0),
                             })
                         break
                 if titles:
