@@ -19,6 +19,7 @@ class Genres:
         re.compile('^(.+?) (classics)$'),
         re.compile('^(.+?) (documentaries)$'),
         re.compile('^(crime) (action)$'),
+        re.compile('^(crime) (action & adventure)$'),
         re.compile('^(espionage) (action)$'),
         re.compile('^(military & war) (action)$'),
         re.compile('^(sci-fi) (adventure)$'),
@@ -26,6 +27,7 @@ class Genres:
         re.compile('^(sci-fi) (horror)$'),
         re.compile('^(action) (sci-fi & fantasy)$'),
         re.compile('^(alien) (sci-fi)$'),
+        re.compile('^(comic book) and (superhero)$'),
     ]
 
     _extractors = [
@@ -38,13 +40,20 @@ class Genres:
         re.compile('^(heist) films$'),
         re.compile('^(heist) films$'),
         re.compile('^(animation) for grown-ups$'),
+        re.compile('^movies for (.*?)$'),
+        re.compile('^(.*?) movies$'),
     ]
 
     _mappers = {
         'ages 5-7' : 'family',
         'ages 8-10' : 'family',
         'ages 11-12' : 'family',
+        'ages 5 to 7' : 'family',
+        'ages 8 to 10' : 'family',
+        'ages 11 to 12' : 'family',
+        'feature animation' : 'animation',
         'children & family' : 'family',
+        'children & family movies' : 'family',
         'kids & family' : 'family',
         'science fiction & fantasy' : 'sci-fi & fantasy',
         'science fiction' : 'sci-fi',
@@ -96,6 +105,8 @@ class Genres:
         'dark humor',
         'must-see',
         'the book',
+        'a book',
+        'movies',
     ))
 
     _priority = [ k for k, v in sorted(config.genre_to_bit_map.items(), key=lambda i: i[1]) ]

@@ -7,7 +7,7 @@ from decimal import Decimal
 from operator import itemgetter
 import gevent
 
-from filmdata.lib.scrape import Scrape, ScrapeQueue
+from filmdata.lib.scrape import ScrapeQueue
 
 import filmdata
 from filmdata.lib.util import dson, class_property
@@ -17,8 +17,20 @@ log = logging.getLogger(__name__)
 
 class FlixsterScrape(ScrapeQueue):
 
+    @property
+    def known_ids(self):
+        if not hasattr(self, '_known_ids'):
+            self._known_ids = self._get_known_ids()
+        return self._known_ids
+
+    @property
+    def reviewed_ids(self):
+        if not hasattr(self, '_reviewed_ids'):
+            self._reviewed_ids = self._get_known_ids('review')
+        return self._reviewed_ids
+
     def __init__(self):
-        ScrapeQueue.__init__(self)
+        ScrapeQueue.__init__(self, lifo=False)
         self._dispatch = {
             'info' : self.handler_info,
             'review' : self.handler_review,
@@ -26,33 +38,49 @@ class FlixsterScrape(ScrapeQueue):
         }
         self._max_clients = 8
         self._delay = 1.2
-        self._max_requests = 3000
+        self._max_requests = 9500
         self._request_count = 0
         self._workers = []
+        self._scan_all = False
+        self._scan_merged = True
+        self._scan_unreviewed = False
+        self._scan_missing = True
+        self._scan_lists = True
         self._scan_args = { 'apikey' : Fetch._api_key,
                             'page_limit' : 50 }
 
     def run(self):
         self.q.put(None)
-        for url, query in self.get_scan_urls():
-            self.q.put({
-                'type' : 'scan',
-                'url' : url,
-                'kwargs' : { 'query' : query },
-            })
+        if self._scan_lists:
+            for url in self.get_list_urls():
+                self.q.put({
+                    'type' : 'scan',
+                    'url' : url,
+                })
 
-        for id, url in self.get_info_urls():
-            self.q.put({
-                'type' : 'info',
-                'url' : url,
-                'kwargs' : { 'id' : id },
-            })
+        if self._scan_missing:
+            for id, url in self.get_info_urls():
+                self.q.put({
+                    'type' : 'info',
+                    'url' : url,
+                    'kwargs' : { 'id' : id },
+                })
 
-        for url in self.get_list_urls():
-            self.q.put({
-                'type' : 'scan',
-                'url' : url,
-            })
+        if self._scan_unreviewed:
+            for id, url in self.get_unreviewed_urls():
+                self.q.put({
+                    'type' : 'review',
+                    'url' : url,
+                    'kwargs' : { 'id' : id },
+                })
+
+        if self._scan_merged:
+            for url, query in self.get_scan_urls():
+                self.q.put({
+                    'type' : 'scan',
+                    'url' : url,
+                    'kwargs' : { 'query' : query },
+                })
 
         self._workers = [ gevent.spawn(self.worker) for i in
                           range(self._max_clients) ]
@@ -61,9 +89,9 @@ class FlixsterScrape(ScrapeQueue):
         self.finish()
 
     def finish(self):
-        Fetch._dump(type='ids')
-        Fetch._dump(type='info')
-        Fetch._dump(type='reviews')
+        self._dump(type='ids')
+        self._dump(type='info')
+        self._dump(type='reviews')
 
     def worker(self):
         while True:
@@ -108,18 +136,19 @@ class FlixsterScrape(ScrapeQueue):
         content = json.loads(resp.buffer.strip())
         # make sure it's legit (need the title for later
         # to test if fetched
-        if content['links'].get('next'):
-            args = urllib.urlencode(self._scan_args)
-            self.q.put({
-                'type' : 'review',
-                'url' : '&'.join((list['links']['next'], args)),
-                'kwargs' : { 'id' : id },
-            })
+        #if content['links'].get('next'):
+            #args = urllib.urlencode(self._scan_args)
+            #self.q.put({
+                #'type' : 'review',
+                #'url' : '&'.join((list['links']['next'], args)),
+                #'kwargs' : { 'id' : id },
+            #})
 
         if content.get('reviews'):
             item = { 'id' : id, 'reviews' : content['reviews'] }
             filmdata.sink.store_source_fetch('flixster_review', item)
             log.info('Added flixster review %d' % id)
+        self.reviewed_ids.add(id)
         return True
 
     @handler
@@ -137,22 +166,24 @@ class FlixsterScrape(ScrapeQueue):
                 'url' : '&'.join((content['links']['next'], args)),
             })
 
-        list = content.get('movies', [])
-        for id in [ int(m['id']) for m in list if
-                    int(m['id']) not in Fetch.known_ids ]:
-            filmdata.sink.store_source_fetch('flixster_title', { 'id' : id })
-            Fetch.known_ids.add(id)
-            log.info('Added flixster id %d' % id)
-            self.q.put({
-                'type' : 'info',
-                'url' : self.get_info_url(id)[1], 
-                'kwargs' : { 'id' : id },
-            })
-            self.q.put({
-                'type' : 'review',
-                'url' : self.get_review_url(id)[1],
-                'kwargs' : { 'id' : id },
-            })
+        movies = content.get('movies', [])
+        for movie in movies:
+            id = int(movie['id'])
+            if not id in self.known_ids:
+                filmdata.sink.store_source_fetch('flixster_title', { 'id' : id })
+                self.known_ids.add(id)
+                log.info('Added flixster id %d' % id)
+                self.q.put({
+                    'type' : 'info',
+                    'url' : self.get_info_url(id)[1], 
+                    'kwargs' : { 'id' : id },
+                })
+            if not id in self.reviewed_ids:
+                self.q.put({
+                    'type' : 'review',
+                    'url' : self.get_review_url(id)[1],
+                    'kwargs' : { 'id' : id },
+                })
         if query:
             filmdata.sink.store_source_fetch('flixster_title_search_log', query)
 
@@ -175,11 +206,16 @@ class FlixsterScrape(ScrapeQueue):
                          urllib.urlencode(args)))
 
     def get_scan_urls(self): 
-        searched_primary_ids = set(map(itemgetter('id'),
-                                       Fetch._get_logged_searches()))
-        unsearched_test = lambda t: t['id'] not in searched_primary_ids
+        if not self._scan_all:
+            searched_primary_ids = set(map(itemgetter('id'),
+                                           self._get_logged_searches()))
+            unsearched_test = lambda t: t['id'] not in searched_primary_ids
 
-        title_iter = ifilter(unsearched_test, filmdata.sink.get_titles())
+            title_iter = ifilter(unsearched_test,
+                                 filmdata.sink.get_titles_by_popularity())
+        else:
+            title_iter = filmdata.sink.get_titles_by_popularity()
+
         for title in title_iter:
             yield [self.get_scan_url(title['name']), { 'id' : title['id'],
                                                        'name' : title['name']}]
@@ -190,13 +226,19 @@ class FlixsterScrape(ScrapeQueue):
                 '?'.join((config.flixster.title_info_url + str(id) + '.json',
                           args)))
 
+    def get_unreviewed_urls(self):
+        for title in filmdata.sink.get_titles_by_popularity():
+            if (title['alternate'].get('flixster') and not
+                title['alternate']['flixster'] in self.reviewed_ids):
+                yield self.get_review_url(title['alternate']['flixster'])
+
     def get_info_urls(self):
         unfetched_title_ids = map(itemgetter('id'),
                                   filter(lambda t: t.get('title') is None,
-                                         Fetch._get_fetched_info(type='title')))
+                                         self._get_fetched_info(type='title')))
         if len(unfetched_title_ids) == 0:
             log.info('no ids left for which to fetch titles')
-            Fetch._dump_titles(type='info')
+            self._dump_titles(type='info')
             return
 
         unfetched_title_ids.sort()
@@ -215,6 +257,41 @@ class FlixsterScrape(ScrapeQueue):
         url_maker = lambda p: '?'.join((p, args))
         return map(url_maker, paths)
 
+    def _get_reviewed_ids(self):
+        return self._get_known_ids('review')
+
+    def _get_known_ids(self, type='title'):
+        if self._scan_all:
+            return set()
+        return set(map(itemgetter('id'),
+                   filmdata.sink.get_source_fetch('flixster_%s' % type,
+                                                  ids_only=True)))
+
+    def _dump(self, type='ids'):
+        if type == 'ids':
+            log.info('dumping ids to %s' % config.flixster.titles_path)
+            json.dump(list(self.known_ids),
+                      open(config.flixster.title_ids_path, 'w'))
+        elif type == 'reviews':
+            log.info('dumping reviews to %s' %
+                     config.flixster.title_reviews_path)
+            dson.dump(dict([ (i['id'], i) for i in
+                             self._get_fetched_info('reviews') ]),
+                      config.flixster.titles_path)
+        else:
+            log.info('dumping titles to %s' % config.flixster.titles_path)
+            dson.dump(dict([ (i['id'], i) for i in
+                             self._get_fetched_info('title') ]),
+                      config.flixster.titles_path)
+        log.info('dump complete')
+
+    def _get_fetched_info(self, type='title'):
+        return filmdata.sink.get_source_fetch('flixster_%s' % type)
+
+    def _get_logged_searches(self, type='title'):
+        return filmdata.sink.get_source_fetch('flixster_%s_search_log' % type)
+
+
 class Fetch:
 
     name = 'flixster'
@@ -224,13 +301,6 @@ class Fetch:
     _max_threads = 8
     _max_requests = 3200
 
-    @class_property
-    @classmethod
-    def known_ids(cls):
-        if not hasattr(cls, '_known_ids'):
-            cls._known_ids = set(cls._get_known_ids())
-        return cls._known_ids
-
     @classmethod
     def fetch_data(cls, pull_ids=False):
         scraper = FlixsterScrape()
@@ -239,144 +309,9 @@ class Fetch:
         #cls.fetch_info()
 
     @classmethod
-    def fetch_ids(cls, title_types=None, id_types=None):
-        arg_maker = lambda title: {
-            'apikey' : cls._api_key,
-            'q' : title['name'].lower().encode('utf-8'),
-            'page_limit' : 50,
-            'page' : 1,
-        }
-        unsearched_test = lambda t: t['id'] not in searched_primary_ids
-        url_maker = lambda args: '?'.join((config.flixster.title_search_url,
-                                           urllib.urlencode(args)))
-
-        def mark_searched(title):
-            filmdata.sink.store_source_fetch('flixster_title_search_log',
-                                             { 'id' : title['id'],
-                                               'name' : title['name'], })
-            return title
-
-        searched_primary_ids = set(map(itemgetter('id'),
-                                       cls._get_logged_searches()))
-        titles = filmdata.sink.get_source_titles(config.core.primary_title_source)
-        title_iter = imap(mark_searched, ifilter(unsearched_test, titles))
-        url_source = islice(imap(url_maker, imap(arg_maker, title_iter)),
-                            0, cls._max_requests)
-
-        scraper = Scrape(url_source, cls._add_new_ids,
-                         max_clients=8, anon=False, delay=1.3)
-        scraper.run()
-        cls._dump(type='ids')
-
-    @classmethod
-    def fetch_new_ids(cls):
-        args = urllib.urlencode({ 'apikey' : cls._api_key,
-                                  'page_limit' : 50 })
-        paths = ( config.flixster.title_theaters_url,
-                  config.flixster.title_opening_url,
-                  config.flixster.title_released_url,
-                  config.flixster.title_releasing_url, )
-        url_maker = lambda p: '?'.join((p, args))
-        for url in map(url_maker, paths):
-            url_next = url
-            while url_next:
-                log.info('Fetching/adding Flixster list: %s' % url_next)
-                content = urllib.urlopen(url_next).read().strip()
-                if content:
-                    list = cls._add_new_ids(content, url)
-                    if list['links'].get('next'):
-                        url_next = '&'.join((list['links']['next'], args))
-                    else:
-                        url_next = None
-                else:
-                    url_next = None
-
-    @classmethod
-    def fetch_info(cls):
-        def handler(resp, resp_url):
-            title = json.loads(resp.buffer.strip())
-            # make sure it's legit (need the title for later
-            # to test if fetched
-            if title.get('id') and title.get('title'):
-                title['id'] = int(title['id'])
-                filmdata.sink.store_source_fetch('flixster_title', title)
-            return True
-
-        unfetched_title_ids = map(itemgetter('id'),
-                                  filter(lambda t: t.get('title') is None,
-                                         cls._get_fetched_info(type='title')))
-        if len(unfetched_title_ids) == 0:
-            log.info('no ids left for which to fetch titles')
-            cls._dump_titles(type='info')
-            return
-
-        unfetched_title_ids.sort()
-        if len(unfetched_title_ids) > cls._max_requests:
-            ids_to_fetch = unfetched_title_ids[:cls._max_requests]
-        else:
-            ids_to_fetch = unfetched_title_ids
-
-        args = urllib.urlencode({ 'apikey' : cls._api_key, })
-        url_maker = lambda id: '?'.join((config.flixster.title_info_url + str(id) + '.json',
-                                         args))
-
-        log.info('Starting at id %s' % str(ids_to_fetch[0]))
-        url_source = islice(imap(url_maker, iter(ids_to_fetch)),
-                            0, cls._max_requests)
-        scraper = Scrape(url_source, handler,
-                         max_clients=8, anon=True, delay=1.3)
-        scraper.run()
-        cls._dump(type='info')
-
-    #@classmethod
-    #def fetch_reviews(cls):
-        #def handler(resp, resp_url):
-
-    @classmethod
-    def _add_new_ids(cls, resp, resp_url=None):
-        if isinstance(resp, basestring):
-            buffer = resp
-        else:
-            buffer = resp.buffer
-        list = json.loads(buffer.strip())
-        for id in [ int(m['id']) for m in list['movies'] if
-                    int(m['id']) not in cls.known_ids ]:
-            log.debug('Added flixster id %d' % id)
-            filmdata.sink.store_source_fetch('flixster_title', { 'id' : id })
-        return list
-
-    @classmethod
-    def _dump(cls, type='ids'):
-        if type == 'ids':
-            log.info('dumping ids to %s' % config.flixster.titles_path)
-            json.dump(list(cls.known_ids),
-                      open(config.flixster.title_ids_path, 'w'))
-        elif type == 'reviews':
-            log.info('dumping reviews to %s' %
-                     config.flixster.title_reviews_path)
-            dson.dump(dict([ (i['id'], i) for i in
-                             cls._get_fetched_info('reviews') ]),
-                      config.flixster.titles_path)
-        else:
-            log.info('dumping titles to %s' % config.flixster.titles_path)
-            dson.dump(dict([ (i['id'], i) for i in
-                             cls._get_fetched_info('title') ]),
-                      config.flixster.titles_path)
-        log.info('dump complete')
-
-    @classmethod
     def _get_fetched_info(cls, type='title'):
         return filmdata.sink.get_source_fetch('flixster_%s' % type)
 
-    @classmethod
-    def _get_known_ids(cls, type='title'):
-        return map(itemgetter('id'),
-                   filmdata.sink.get_source_fetch('flixster_%s' % type,
-                                                  ids_only=True))
-
-    @classmethod
-    def _get_logged_searches(cls, type='title'):
-        return filmdata.sink.get_source_fetch('flixster_%s_search_log' % type)
 
 class Produce:
 
@@ -388,7 +323,6 @@ class Produce:
 
     @classmethod
     def produce_titles(cls, types):
-        
         flix_titles = Fetch._get_fetched_info(type='title')
         for flix_title in flix_titles:
             if not flix_title.get('title') or not flix_title.get('year'):

@@ -290,13 +290,15 @@ class CatalogTitle:
         return { label_to_key_map[label] : avail }
 
     def _get_availabilities(self):
-        nodes = list(self.node.find('./link[@rel="http://schemas.'
-                       'netflix.com/catalog/titles/f'
-                       'ormat_availability"]/delivery'
-                       '_formats'))
+        nodes = self.node.find('./link[@rel="http://schemas.'
+                               'netflix.com/catalog/titles/f'
+                               'ormat_availability"]/delivery'
+                               '_formats')
         avails = {}
-        for avail in [ a for a in map(self._get_availability, nodes) if a ]:
-            avails.update(avail)
+        if nodes:
+            for avail in [ a for a in
+                           map(self._get_availability, list(nodes)) if a ]:
+                avails.update(avail)
         return avails
             
     def _get_art(self):

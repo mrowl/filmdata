@@ -6,7 +6,7 @@ import filmdata.lib.socks as socks
 from filmdata.lib.util import take
 import gevent
 from gevent import monkey
-from gevent.queue import LifoQueue as Queue
+from gevent.queue import LifoQueue, Queue
 
 import httplib2
 
@@ -106,7 +106,7 @@ class ScrapeQueue(object):
 
     def __init__(self, scrape_callback=None,
                  follow_redirects=True, anon=False, max_clients=10,
-                 max_retries=10, delay=0, timeout=3.0):
+                 max_retries=10, delay=0, timeout=3.0, lifo=False):
         self._scrape_callback = scrape_callback
         self._follow_redirects = follow_redirects
         self._max_redirects = 5
@@ -114,7 +114,10 @@ class ScrapeQueue(object):
         self._max_clients = max_clients
         self._proxy = {}
         self._delay = delay
-        self.q = Queue()
+        if lifo:
+            self.q = LifoQueue()
+        else:
+            self.q = Queue()
         if anon:
             self._proxy = { 'proxy_host' : '127.0.0.1',
                             'proxy_port' : 8118 }

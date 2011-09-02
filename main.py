@@ -90,6 +90,8 @@ def main():
                       help="merge all the matched id tuples")
     parser.add_option("--all", action="store_true", dest="all",
                       help="operate on all items instead of just diff ones")
+    parser.add_option("--nflx", action="store_true", dest="nflx_test",
+                      help="operate on all items instead of just diff ones")
     (options, args) = parser.parse_args()
     
     if options.sink_init:
@@ -105,6 +107,11 @@ def main():
     else:
         status = ('new', 'updated', None)
 
+    if options.nflx_test:
+        source = filmdata.source.manager.load('netflix')
+        res = source.Fetch._fetch('http://api.netflix.com/catalog/titles?term=the%20beaver')
+        print res
+
     if options.match:
         if options.op_title:
             match = filmdata.match.Match('title')
@@ -119,23 +126,23 @@ def main():
             filmdata.sink.consume_merged_titles(
                 merge.produce(match_status=status))
             log.info('Done merging titles')
-            log.info('Started crunching titles')
-            crunch(None, 'title', None)
-            log.info('Finished crunching titles')
         elif options.op_person:
             merge = filmdata.merge.Merge('person')
             filmdata.sink.consume_merged_persons(
                 merge.produce(match_status=status))
             log.info('Done merging persons')
-            log.info('Started crunching persons')
-            crunch(None, 'person', None)
-            log.info('Finished crunching persons')
+        log.info('Started crunching titles')
+        crunch(None, 'title', None, None)
+        log.info('Finished crunching titles')
+        log.info('Started crunching persons')
+        crunch(None, 'person', None, None)
+        log.info('Finished crunching persons')
 
     if options.fetches:
         for name in options.fetches.split(','):
             source = filmdata.source.manager.load(name)
             if options.op_votes:
-                source.Fetch.fetch_votes()
+                source.Fetch.fetch_votes(fetch_existing=options.all)
             elif options.op_ids:
                 source.Fetch.fetch_ids(active_title_types, options.op_ids)
             else:

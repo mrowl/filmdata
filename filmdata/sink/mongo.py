@@ -71,6 +71,7 @@ class MongoSink:
         base_thing_index = {
             'alternate.netflix' : pmongo.ASCENDING,
             'alternate.flixster' : pmongo.ASCENDING,
+            'name' : pmongo.ASCENDING,
         }
         self.m.title.ensure_index(base_thing_index.items())
         self.m.person.ensure_index(base_thing_index.items())
@@ -80,6 +81,8 @@ class MongoSink:
         self.m.imdb_data_person.ensure_index([('ident', pmongo.ASCENDING)],
                                              unique=True)
 
+        self.m.title.ensure_index([('rating.imdb.count',
+                                    pmongo.DESCENDING)])
         primary_match_index = { 'imdb' : pmongo.ASCENDING }
         base_match_index = {
             'netflix' : pmongo.ASCENDING,
@@ -352,11 +355,19 @@ class MongoSink:
     def get_title_ratings(self):
         return imap(self._clean, self.m.title.find(fields={'rating' : 1}))
     
+    def get_titles_by_popularity(self):
+        return imap(self._clean,
+                    self.m.title.find(sort=[('rating.imdb.count',
+                                             pmongo.DESCENDING)]))
+
     def consume_source_persons(self, producer, source_name):
         start = time.time()
         collection = '%s_person' % source_name
         clean_producer = imap(self._jsonify, producer)
         for person_in in imap(self._clean, clean_producer):
+            if not person_in.get('_id'):
+                log.debug('No ID for person: %s' + str(person_in))
+                continue
             person = dict([ (k, v) for k, v in person_in.items() if
                             not k == 'noinsert' ])
             has_person = self.m[collection].find_one(

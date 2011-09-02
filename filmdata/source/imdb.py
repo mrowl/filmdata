@@ -97,17 +97,19 @@ class Fetch(ImdbMixin):
             uri_id_match = cls._re_uri_id.match(uri)
             if uri_id_match:
                 id = int(uri_id_match.group(3))
-                print 'uri matched %s %s to %s' % (cls._type, ident, str(id))
+                log.debug('uri matched %s %s to %s' %
+                          (cls._type, ident, str(id)))
             else:
-                print 'redirect with no uri id match: %s' % uri
+                log.debug('redirect with no uri id match: %s' % uri)
         elif resp.status >= 400:
             log.error("Scraper error:" % str(resp))
         elif cls._type == 'person':
             id = cls._extract_id_from_html(resp.buffer.split("\n"), ident)
             if id:
-                print 'html matched %s %s to %s' % (cls._type, ident, str(id))
+                log.debug('html matched %s %s to %s' %
+                          (cls._type, ident, str(id)))
             else:
-                print 'no match for %s %s' % (cls._type, ident)
+                log.debug('no match for %s %s' % (cls._type, ident))
         if id:
             id_data = { 'ident' : ident }
             filmdata.sink.store_source_data('imdb', data=id_data,
